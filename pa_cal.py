@@ -30,6 +30,7 @@ Template variables available in --start-gcode / --end-gcode files:
 """
 
 import argparse
+import io
 import math
 import os
 import re
@@ -255,6 +256,63 @@ def _write_bgcode(gcode_text: str, dest) -> int:
         dest.write(content)
 
     return len(content)
+
+
+def _upload_prusalink(
+    data: bytes,
+    url: str,
+    key: str,
+    filename: str,
+    start_print: bool,
+) -> None:
+    """Upload G-code to a printer running PrusaLink and optionally start printing.
+
+    Uses the PrusaLink v1 REST API (PUT /api/v1/files/local/{filename}).
+    Authentication is via the X-Api-Key header (Settings → API Key in the
+    printer's web UI).  Print-After-Upload uses the RFC 8941 boolean header
+    as documented in the PrusaLink OpenAPI spec.
+
+    url         — base URL of the printer, e.g. http://192.168.1.100
+    key         — PrusaLink API key
+    filename    — filename to create on the printer's local storage
+    start_print — set Print-After-Upload: ?1 to auto-start after upload
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    base = url.rstrip("/")
+    upload_url = f"{base}/api/v1/files/local/{urllib.parse.quote(filename, safe='')}"
+
+    headers = {
+        "X-Api-Key": key,
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(len(data)),
+        "Overwrite": "?1",
+    }
+    if start_print:
+        headers["Print-After-Upload"] = "?1"
+
+    req = urllib.request.Request(
+        upload_url,
+        data=data,
+        method="PUT",
+        headers=headers,
+    )
+
+    print(f"Uploading {filename} ({len(data):,} bytes) to {base} …", file=sys.stderr)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        print(f"ERROR: upload failed: HTTP {e.code} {e.reason}", file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"ERROR: upload failed: {e.reason}", file=sys.stderr)
+        sys.exit(1)
+
+    action = "uploaded and print started" if start_print else "uploaded"
+    print(f"OK — {filename} {action} (HTTP {status})", file=sys.stderr)
 
 
 # ── Configuration dataclass ────────────────────────────────────────────────────
@@ -935,6 +993,30 @@ def _build_parser() -> argparse.ArgumentParser:
                        "Without -o, binary is written to stdout (pipe to a file)."
                    ))
 
+    g = p.add_argument_group("PrusaLink upload (local network)")
+    g.add_argument("--prusalink-url", metavar="URL",
+                   help="Base URL of the printer's PrusaLink interface "
+                        "(e.g. http://192.168.1.100). "
+                        "Uploads the generated G-code to the printer after generation. "
+                        "Requires --prusalink-key.")
+    g.add_argument("--prusalink-key", metavar="KEY",
+                   help="PrusaLink API key (Settings → API Key in the printer web UI)")
+    g.add_argument("--prusalink-filename", metavar="NAME",
+                   help="Filename to store on the printer "
+                        "(default: basename of -o, or pa_cal.gcode / pa_cal.bgcode)")
+    g.add_argument("--prusalink-print", action="store_true",
+                   help="Start printing immediately after upload")
+
+    g = p.add_argument_group("PrusaConnect upload (cloud)")
+    g.add_argument("--prusaconnect-key", metavar="KEY",
+                   help="PrusaConnect API key (connect.prusa3d.com → Printer detail → API Key). "
+                        "Uploads the generated G-code to PrusaConnect after generation.")
+    g.add_argument("--prusaconnect-filename", metavar="NAME",
+                   help="Filename to store in PrusaConnect "
+                        "(default: basename of -o, or pa_cal.gcode / pa_cal.bgcode)")
+    g.add_argument("--prusaconnect-print", action="store_true",
+                   help="Start printing immediately after upload")
+
     return p
 
 
@@ -1062,6 +1144,59 @@ def main():
                   file=sys.stderr)
         else:
             sys.stdout.write(gcode)
+
+    # ── upload via PrusaLink (local network) ───────────────────────────────────
+    if args.prusalink_url:
+        if not args.prusalink_key:
+            print("ERROR: --prusalink-key is required when --prusalink-url is set",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        if args.prusalink_filename:
+            remote_name = args.prusalink_filename
+        elif args.output:
+            remote_name = os.path.basename(args.output)
+        else:
+            remote_name = "pa_cal.bgcode" if args.binary else "pa_cal.gcode"
+
+        if args.binary:
+            buf = io.BytesIO()
+            _write_bgcode(gcode, buf)
+            upload_data = buf.getvalue()
+        else:
+            upload_data = gcode.encode("utf-8")
+
+        _upload_prusalink(
+            upload_data,
+            url=args.prusalink_url,
+            key=args.prusalink_key,
+            filename=remote_name,
+            start_print=args.prusalink_print,
+        )
+
+    # ── upload via PrusaConnect (cloud) ────────────────────────────────────────
+    if args.prusaconnect_key:
+        if args.prusaconnect_filename:
+            remote_name = args.prusaconnect_filename
+        elif args.output:
+            remote_name = os.path.basename(args.output)
+        else:
+            remote_name = "pa_cal.bgcode" if args.binary else "pa_cal.gcode"
+
+        if args.binary:
+            buf = io.BytesIO()
+            _write_bgcode(gcode, buf)
+            upload_data = buf.getvalue()
+        else:
+            upload_data = gcode.encode("utf-8")
+
+        _upload_prusalink(
+            upload_data,
+            url="https://connect.prusa3d.com",
+            key=args.prusaconnect_key,
+            filename=remote_name,
+            start_print=args.prusaconnect_print,
+        )
 
 
 if __name__ == "__main__":

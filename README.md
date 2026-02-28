@@ -151,6 +151,63 @@ Sets hotend/bed temperatures, fan speeds, and retraction distance.
 | `--binary` | Write Prusa binary G-code v1 (.bgcode) |
 | `-o FILE` | Output file (default: stdout) |
 
+### PrusaLink Upload (local network)
+
+Upload the generated file directly to a printer running PrusaLink (the embedded web server on Prusa MK4S, Core One, XL, and Mini with firmware 5.x+). The printer must be reachable on your local network.
+
+| Option | Description |
+|---|---|
+| `--prusalink-url URL` | Base URL of the printer's web interface (e.g. `http://192.168.1.100`) |
+| `--prusalink-key KEY` | API key from the printer (Settings → API Key) |
+| `--prusalink-filename NAME` | Remote filename (default: basename of `-o`, or `pa_cal.gcode`) |
+| `--prusalink-print` | Start printing immediately after upload |
+
+```bash
+# Generate and upload (no local file saved)
+python3 pa_cal.py --prusalink-url http://192.168.1.100 --prusalink-key abc123
+
+# Generate, save locally, upload, and start printing
+python3 pa_cal.py -o pa_cal.gcode \
+  --prusalink-url http://192.168.1.100 \
+  --prusalink-key abc123 \
+  --prusalink-print
+
+# Upload bgcode and start print
+python3 pa_cal.py --binary -o pa_cal.bgcode \
+  --prusalink-url http://192.168.1.100 \
+  --prusalink-key abc123 \
+  --prusalink-print
+```
+
+> **Finding your API key:** Open the printer's web UI, go to **Settings → API Key**, and copy the key shown there.
+
+### PrusaConnect Upload (cloud)
+
+Upload directly to [connect.prusa3d.com](https://connect.prusa3d.com) so you can trigger a print from anywhere without needing to be on the same network as the printer. Uses the same API as PrusaLink, just routed through the cloud.
+
+| Option | Description |
+|---|---|
+| `--prusaconnect-key KEY` | API key from connect.prusa3d.com (Printer detail → API Key) |
+| `--prusaconnect-filename NAME` | Remote filename (default: basename of `-o`, or `pa_cal.gcode`) |
+| `--prusaconnect-print` | Start printing immediately after upload |
+
+```bash
+# Generate and upload to PrusaConnect
+python3 pa_cal.py --prusaconnect-key abc123
+
+# Upload and start print
+python3 pa_cal.py -o pa_cal.gcode \
+  --prusaconnect-key abc123 \
+  --prusaconnect-print
+
+# Upload bgcode and start print
+python3 pa_cal.py --binary -o pa_cal.bgcode \
+  --prusaconnect-key abc123 \
+  --prusaconnect-print
+```
+
+> **Finding your API key:** Log in to [connect.prusa3d.com](https://connect.prusa3d.com), open the **Printer detail** page for your printer, and copy the **API Key** shown there.
+
 ### Custom Start / End G-code
 
 The built-in start/end G-code is derived from PrusaSlicer's Core One profile. Override with:
