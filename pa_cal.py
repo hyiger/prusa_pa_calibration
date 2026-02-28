@@ -278,10 +278,11 @@ def _upload_prusalink(
     start_print — set Print-After-Upload: ?1 to auto-start after upload
     """
     import urllib.error
+    import urllib.parse
     import urllib.request
 
     base = url.rstrip("/")
-    upload_url = f"{base}/api/v1/files/local/{filename}"
+    upload_url = f"{base}/api/v1/files/local/{urllib.parse.quote(filename, safe='')}"
 
     headers = {
         "X-Api-Key": key,
