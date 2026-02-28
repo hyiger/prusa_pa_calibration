@@ -1,6 +1,13 @@
-# Prusa PA Calibration
+# Prusa Calibration Tools
 
-A single-file Python tool that generates **Linear Advance (PA/K) calibration G-code** for Prusa printers. It prints a row of V-shaped test patterns, each at a different K value, so you can visually pick the best pressure advance setting.
+Python tools that generate calibration G-code for Prusa printers. No external dependencies — pure stdlib, Python 3.10+.
+
+| Script | Purpose |
+|---|---|
+| `pa_cal.py` | Linear Advance (PA/K) calibration — V-shaped corner patterns |
+| `temp_tower.py` | Temperature tower — rectangular tower with per-segment temperatures |
+
+Both scripts share the same printer/filament presets, retraction options, and upload flags.
 
 Supports: Mini, MK4S, Core One (default), Core One L, XL.
 
@@ -8,9 +15,15 @@ Supports: Mini, MK4S, Core One (default), Core One L, XL.
 
 - Python 3.10+
 - No external dependencies (pure stdlib)
-- Prusa printer with Marlin firmware and M900 Linear Advance support
+- Prusa printer with Marlin firmware
 
-## Quick Start
+---
+
+## pa_cal.py — Linear Advance Calibration
+
+Prints a row of V-shaped corner patterns, each at a different K value. The pattern with the sharpest corner is your ideal pressure-advance setting.
+
+### Quick Start
 
 ```bash
 # Coarse scan: K = 0, 1, 2, 3, 4 (Core One, PLA defaults)
@@ -25,14 +38,11 @@ python3 pa_cal.py --filament PETG -o petg.gcode
 # PETG on an MK4S
 python3 pa_cal.py --printer MK4S --filament PETG -o mk4s_petg.gcode
 
-# PA (Nylon) with a manual hotend override
-python3 pa_cal.py --filament PA --hotend-temp 265 -o pa.gcode
-
 # Binary G-code (.bgcode) for SD card
 python3 pa_cal.py -o la_cal.bgcode --binary
 ```
 
-## How to Read the Results
+### How to Read the Results
 
 Print the file, then examine the V-shaped corners under good lighting:
 
@@ -44,11 +54,84 @@ Print the file, then examine the V-shaped corners under good lighting:
 
 Run a coarse scan first (default K=0–4, step=1), identify the best-looking column, then run a fine scan (step=0.1) centred on that value.
 
-## CLI Reference
+### pa_cal.py Options
 
+#### Linear Advance
+| Option | Default | Description |
+|---|---|---|
+| `--la-start K` | 0.0 | Start K value |
+| `--la-end K` | 4.0 | End K value |
+| `--la-step K` | 1.0 | K increment per pattern |
+
+#### Pattern Geometry
+| Option | Default | Notes |
+|---|---|---|
+| `--layer-count N` | 4 | Layers per pattern |
+| `--side-length mm` | 20.0 | Leg length; decrease for fine scans with many patterns |
+| `--wall-count N` | 3 | Nested walls per pattern |
+| `--corner-angle deg` | 90.0 | Angle at apex |
+| `--pattern-spacing mm` | 2.0 | Gap between patterns |
+
+#### Labels
+| Option | Description |
+|---|---|
+| `--no-number-tab` | Suppress K-value labels on first layer |
+| `--no-leading-zeros` | Print `.4` instead of `0.4` in labels |
+
+---
+
+## temp_tower.py — Temperature Tower
+
+Prints a rectangular tower split into horizontal segments, each at a different hotend temperature. Examine surface quality, bridging, and stringing at each band to find your ideal temperature.
+
+### Quick Start
+
+```bash
+# PLA: 215 → 185 °C in 5 °C steps (default)
+python3 temp_tower.py -o temp_tower.gcode
+
+# PETG on Core One
+python3 temp_tower.py --filament PETG -o petg_tower.gcode
+
+# PETG with explicit range
+python3 temp_tower.py --filament PETG --temp-start 240 --temp-end 210 -o petg_tower.gcode
+
+# ABS on MK4S
+python3 temp_tower.py --printer MK4S --filament ABS -o abs_tower.gcode
+
+# Fine scan around 230 °C
+python3 temp_tower.py --temp-start 235 --temp-end 225 --temp-step 2 -o fine_tower.gcode
 ```
-python3 pa_cal.py [options] -o OUTPUT
-```
+
+### How to Read the Results
+
+Print the tower and examine each horizontal band:
+
+| What to look for | Meaning |
+|---|---|
+| Stringing between features | Temperature too **high** |
+| Poor layer adhesion / brittle | Temperature too **low** |
+| Clean surface, good bridging | Temperature is **correct** |
+
+The bottom segment is `--temp-start`, the top segment is `--temp-end`. Work from bottom (hotter) to top (cooler) by default.
+
+### temp_tower.py Options
+
+| Option | Default | Description |
+|---|---|---|
+| `--temp-start °C` | preset or 215 | Bottom segment temperature |
+| `--temp-end °C` | temp-start − 30 | Top segment temperature |
+| `--temp-step °C` | 5.0 | Temperature change per segment |
+| `--segment-height mm` | 5.0 | Height of each temperature band |
+| `--tower-width mm` | 20.0 | Tower footprint width (X) |
+| `--tower-depth mm` | 20.0 | Tower footprint depth (Y) |
+| `--wall-count N` | 2 | Perimeter walls per layer |
+
+---
+
+## Shared Options
+
+Both scripts accept the following options.
 
 ### Printer & Filament Presets
 
@@ -82,13 +165,6 @@ Sets hotend/bed temperatures, fan speeds, and retraction distance.
 | `TPU` | 230 °C | 60 °C | 50 % | 0.0 mm |
 | `PC` | 275 °C | 110 °C | 0 % | 1.0 mm |
 
-### Linear Advance
-| Option | Default | Description |
-|---|---|---|
-| `--la-start K` | 0.0 | Start K value |
-| `--la-end K` | 4.0 | End K value |
-| `--la-step K` | 1.0 | K increment per pattern |
-
 ### Temperatures
 | Option | Default | Description |
 |---|---|---|
@@ -109,7 +185,6 @@ Sets hotend/bed temperatures, fan speeds, and retraction distance.
 |---|---|
 | `--first-layer-height mm` | 0.25 |
 | `--layer-height mm` | 0.20 |
-| `--layer-count N` | 4 |
 
 ### Speeds (mm/s)
 | Option | Default |
@@ -117,14 +192,6 @@ Sets hotend/bed temperatures, fan speeds, and retraction distance.
 | `--print-speed` | 100.0 |
 | `--first-layer-speed` | 30.0 |
 | `--travel-speed` | 150.0 |
-
-### Pattern Geometry
-| Option | Default | Notes |
-|---|---|---|
-| `--side-length mm` | 20.0 | Leg length; decrease for fine scans with many patterns |
-| `--wall-count N` | 3 | Nested walls per pattern |
-| `--corner-angle deg` | 90.0 | Angle at apex |
-| `--pattern-spacing mm` | 2.0 | Gap between patterns |
 
 ### Anchor (first layer adhesion)
 | Option | Default | Description |
@@ -143,9 +210,7 @@ Sets hotend/bed temperatures, fan speeds, and retraction distance.
 ### Output Options
 | Option | Description |
 |---|---|
-| `--no-number-tab` | Suppress K-value labels on first layer |
 | `--no-lcd` | Suppress M117 display messages |
-| `--no-leading-zeros` | Print `.4` instead of `0.4` in labels |
 | `--fan-speed %` | Part-cooling fan from layer 2 (default: preset or 100%) |
 | `--first-layer-fan %` | Part-cooling fan on first layer (default: preset or 0%) |
 | `--binary` | Write Prusa binary G-code v1 (.bgcode) |
@@ -159,51 +224,32 @@ Upload the generated file directly to a printer running PrusaLink (the embedded 
 |---|---|
 | `--prusalink-url URL` | Base URL of the printer's web interface (e.g. `http://192.168.1.100`) |
 | `--prusalink-key KEY` | API key from the printer (Settings → API Key) |
-| `--prusalink-filename NAME` | Remote filename (default: basename of `-o`, or `pa_cal.gcode`) |
+| `--prusalink-filename NAME` | Remote filename (default: basename of `-o`, or script default) |
 | `--prusalink-print` | Start printing immediately after upload |
 
 ```bash
-# Generate and upload (no local file saved)
-python3 pa_cal.py --prusalink-url http://192.168.1.100 --prusalink-key abc123
+# Generate PA calibration and upload
+python3 pa_cal.py --prusalink-url http://192.168.1.100 --prusalink-key abc123 --prusalink-print
 
-# Generate, save locally, upload, and start printing
-python3 pa_cal.py -o pa_cal.gcode \
-  --prusalink-url http://192.168.1.100 \
-  --prusalink-key abc123 \
-  --prusalink-print
-
-# Upload bgcode and start print
-python3 pa_cal.py --binary -o pa_cal.bgcode \
-  --prusalink-url http://192.168.1.100 \
-  --prusalink-key abc123 \
-  --prusalink-print
+# Generate temperature tower and upload
+python3 temp_tower.py --filament PETG --prusalink-url http://192.168.1.100 --prusalink-key abc123
 ```
 
 > **Finding your API key:** Open the printer's web UI, go to **Settings → API Key**, and copy the key shown there.
 
 ### PrusaConnect Upload (cloud)
 
-Upload directly to [connect.prusa3d.com](https://connect.prusa3d.com) so you can trigger a print from anywhere without needing to be on the same network as the printer. Uses the same API as PrusaLink, just routed through the cloud.
+Upload directly to [connect.prusa3d.com](https://connect.prusa3d.com) so you can trigger a print from anywhere without needing to be on the same network as the printer.
 
 | Option | Description |
 |---|---|
 | `--prusaconnect-key KEY` | API key from connect.prusa3d.com (Printer detail → API Key) |
-| `--prusaconnect-filename NAME` | Remote filename (default: basename of `-o`, or `pa_cal.gcode`) |
+| `--prusaconnect-filename NAME` | Remote filename (default: basename of `-o`, or script default) |
 | `--prusaconnect-print` | Start printing immediately after upload |
 
 ```bash
-# Generate and upload to PrusaConnect
-python3 pa_cal.py --prusaconnect-key abc123
-
-# Upload and start print
-python3 pa_cal.py -o pa_cal.gcode \
-  --prusaconnect-key abc123 \
-  --prusaconnect-print
-
-# Upload bgcode and start print
-python3 pa_cal.py --binary -o pa_cal.bgcode \
-  --prusaconnect-key abc123 \
-  --prusaconnect-print
+python3 pa_cal.py --prusaconnect-key abc123 --prusaconnect-print
+python3 temp_tower.py --filament PETG --prusaconnect-key abc123 --prusaconnect-print
 ```
 
 > **Finding your API key:** Log in to [connect.prusa3d.com](https://connect.prusa3d.com), open the **Printer detail** page for your printer, and copy the **API Key** shown there.
@@ -214,6 +260,7 @@ The built-in start/end G-code is derived from PrusaSlicer's Core One profile. Ov
 
 ```bash
 python3 pa_cal.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.gcode
+python3 temp_tower.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.gcode
 ```
 
 Template variables available in custom files:
@@ -233,21 +280,12 @@ Template variables available in custom files:
 
 ## Startup Output
 
-On every run the tool prints a summary to stderr so you can confirm active settings:
+On every run the tools print a summary to stderr:
 
 ```
 Printer: MK4S  bed 250×210 mm  max Z 220 mm
-WARNING: built-in start/end G-code is tuned for the Core One. Use --start-gcode / --end-gcode for accurate MK4S output.
+WARNING: no start-gcode or end-gcode found for MK4S — falling back to built-in Core One template ...
 Filament: PETG  hotend 235 °C  bed 85 °C  fan 50 %  retract 0.8 mm
-```
-
-## Bed Overflow Warning
-
-If your LA range and side length don't fit on the bed, the tool prints a warning and suggests a safe `--side-length`:
-
-```
-WARNING: pattern area 130.0×44.0 mm exceeds bed 220×220 mm.
-  Fix: use --side-length 9 (or a larger --la-step / narrower range)
 ```
 
 ## License
