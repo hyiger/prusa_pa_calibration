@@ -31,6 +31,7 @@ Template variables available in --start-gcode / --end-gcode files:
 
 import argparse
 import math
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -941,9 +942,9 @@ def main():
     parser = _build_parser()
     args   = parser.parse_args()
 
-    def _load(path: Optional[str]) -> Optional[str]:
-        if path is None:
-            return None
+    _gcode_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gcode")
+
+    def _load(path: str) -> str:
         try:
             with open(path) as f:
                 return f.read()
@@ -951,26 +952,38 @@ def main():
             print(f"ERROR: cannot read {path}: {e}", file=sys.stderr)
             sys.exit(1)
 
+    def _resolve_template(arg_path: Optional[str], printer_key: str, role: str) -> Optional[str]:
+        """Load template: explicit arg > printer gcode file > None (built-in fallback)."""
+        if arg_path is not None:
+            return _load(arg_path)
+        candidate = os.path.join(_gcode_dir, f"{printer_key.lower()}_{role}.gcode")
+        if os.path.exists(candidate):
+            return _load(candidate)
+        return None  # Generator will use DEFAULT_START_GCODE / DEFAULT_END_GCODE
+
     # ── resolve printer preset (explicit args always win) ───────────────────────
     ppreset = PRINTER_PRESETS[args.printer]
     print(f"Printer: {args.printer}  "
           f"bed {ppreset['bed_x']:.0f}×{ppreset['bed_y']:.0f} mm  "
           f"max Z {ppreset['max_z']:.0f} mm",
           file=sys.stderr)
-    if args.printer != _DEFAULT_PRINTER:
-        missing = []
-        if not args.start_gcode:
-            missing.append("--start-gcode")
-        if not args.end_gcode:
-            missing.append("--end-gcode")
-        if missing:
-            print(
-                f"WARNING: built-in {' and '.join(missing).replace('--', '')} "
-                f"{'is' if len(missing) == 1 else 'are'} tuned for the Core One "
-                f"(parks at X242 Y211, Core One MBL commands). "
-                f"Provide {' and '.join(missing)} for accurate {args.printer} output.",
-                file=sys.stderr,
-            )
+
+    start_tmpl = _resolve_template(args.start_gcode, args.printer, "start")
+    end_tmpl   = _resolve_template(args.end_gcode,   args.printer, "end")
+
+    # Warn only when actually falling back to the built-in Core One template
+    missing = []
+    if start_tmpl is None:
+        missing.append("start-gcode")
+    if end_tmpl is None:
+        missing.append("end-gcode")
+    if missing:
+        print(
+            f"WARNING: no {' or '.join(missing)} found for {args.printer} — "
+            f"falling back to built-in Core One template "
+            f"(parks at X242 Y211, Core One MBL commands).",
+            file=sys.stderr,
+        )
 
     # ── resolve filament preset (explicit args always win) ──────────────────────
     fpreset = FILAMENT_PRESETS.get(args.filament, {}) if args.filament else {}
@@ -1027,8 +1040,8 @@ def main():
 
     gen = Generator(
         cfg,
-        start_template = _load(args.start_gcode),
-        end_template   = _load(args.end_gcode),
+        start_template = start_tmpl,
+        end_template   = end_tmpl,
     )
     gcode = gen.generate()
 
