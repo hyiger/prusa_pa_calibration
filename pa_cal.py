@@ -31,6 +31,7 @@ Template variables available in --start-gcode / --end-gcode files:
 
 import argparse
 import math
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -43,7 +44,7 @@ _XY = 4   # decimal places for X/Y coordinates
 _E  = 5   # decimal places for extrusion amounts
 
 # ── Prusa Core One bed size ────────────────────────────────────────────────────
-BED_X       = 220.0
+BED_X       = 250.0
 BED_Y       = 220.0
 MAX_Z       = 270.0   # Core One build height
 
@@ -61,6 +62,21 @@ FILAMENT_PRESETS: dict[str, dict] = {
     "TPU":  dict(hotend_temp=230, bed_temp=60,  fan_speed=50,  first_layer_fan=0, retract_dist=0.0),
     "PC":   dict(hotend_temp=275, bed_temp=110, fan_speed=0,   first_layer_fan=0, retract_dist=1.0),
 }
+
+# ── Printer presets ────────────────────────────────────────────────────────────
+# Sets bed dimensions and max build height.
+# The built-in start/end G-code is tuned for the Core One; all other printers
+# should supply --start-gcode / --end-gcode.
+#
+# Fields: bed_x (mm), bed_y (mm), max_z (mm), model (M862.3 string)
+PRINTER_PRESETS: dict[str, dict] = {
+    "MINI":     dict(bed_x=180.0, bed_y=180.0, max_z=180.0, model="MINI"),
+    "MK4S":     dict(bed_x=250.0, bed_y=210.0, max_z=220.0, model="MK4S"),
+    "COREONE":  dict(bed_x=250.0, bed_y=220.0, max_z=270.0, model="COREONE"),
+    "COREONEL": dict(bed_x=300.0, bed_y=300.0, max_z=330.0, model="COREONEL"),
+    "XL":       dict(bed_x=360.0, bed_y=360.0, max_z=360.0, model="XL"),
+}
+_DEFAULT_PRINTER = "COREONE"
 
 # ── Default start / end G-code ─────────────────────────────────────────────────
 # Derived from PrusaSlicer's Prusa Core One start G-code.
@@ -245,9 +261,10 @@ def _write_bgcode(gcode_text: str, dest) -> int:
 
 @dataclass
 class Config:
-    # Bed
+    # Bed / build volume
     bed_x: float = BED_X
     bed_y: float = BED_Y
+    max_z: float = MAX_Z
 
     # Toolhead
     nozzle_dia:   float = 0.4
@@ -657,7 +674,7 @@ class Generator:
 
         # Derived template variables
         max_layer_z = _r(c.first_layer_height + (c.layer_count - 1) * c.layer_height, _Z)
-        park_z      = _r(min(max_layer_z + 1.0, MAX_Z), _Z)
+        park_z      = _r(min(max_layer_z + 1.0, c.max_z), _Z)
         mbl_temp    = max(155, c.hotend_temp - 50)
         cool_fan    = "M106 S70  ; cool enclosure (PLA bed temp)" if c.bed_temp <= 60 else "M107"
         m555_x, m555_y, m555_w, m555_h = self._m555(orig_x, orig_y, total_w, total_h)
@@ -799,11 +816,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "  2. Fine scan around winner (e.g. best was K=2):\n"
             "     pa_cal.py --la-start 1.5 --la-end 2.5 --la-step 0.1"
             " --side-length 11 -o fine.gcode\n"
-            "  3. PETG:\n"
-            "     pa_cal.py --hotend-temp 235 --bed-temp 85 -o petg.gcode"
+            "  3. PETG on MK4S:\n"
+            "     pa_cal.py --printer MK4S --filament PETG -o petg.gcode"
         ),
     )
 
+    p.add_argument(
+        "--printer",
+        type=str.upper,
+        choices=list(PRINTER_PRESETS),
+        default=_DEFAULT_PRINTER,
+        metavar="MODEL",
+        help=(
+            "Printer model — sets bed size and max Z height. "
+            f"Choices: {', '.join(PRINTER_PRESETS)}  "
+            f"(default: {_DEFAULT_PRINTER}). "
+            "Non-Core-One printers should also supply --start-gcode / --end-gcode."
+        ),
+    )
     p.add_argument(
         "--filament",
         type=str.upper,
@@ -831,10 +861,14 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Bed temperature (default: from --filament preset, or 60)")
 
     g = p.add_argument_group("Printer / toolhead")
-    g.add_argument("--nozzle-dia",   type=float, default=0.4,   metavar="mm")
-    g.add_argument("--filament-dia", type=float, default=1.75,  metavar="mm")
-    g.add_argument("--bed-x",        type=float, default=BED_X, metavar="mm")
-    g.add_argument("--bed-y",        type=float, default=BED_Y, metavar="mm")
+    g.add_argument("--nozzle-dia",   type=float, default=0.4,  metavar="mm")
+    g.add_argument("--filament-dia", type=float, default=1.75, metavar="mm")
+    g.add_argument("--bed-x",        type=float, default=None, metavar="mm",
+                   help="Bed X size (default: from --printer preset)")
+    g.add_argument("--bed-y",        type=float, default=None, metavar="mm",
+                   help="Bed Y size (default: from --printer preset)")
+    g.add_argument("--max-z",        type=float, default=None, metavar="mm",
+                   help="Maximum build height (default: from --printer preset)")
 
     g = p.add_argument_group("Layer settings")
     g.add_argument("--first-layer-height", type=float, default=0.25, metavar="mm")
@@ -908,9 +942,9 @@ def main():
     parser = _build_parser()
     args   = parser.parse_args()
 
-    def _load(path: Optional[str]) -> Optional[str]:
-        if path is None:
-            return None
+    _gcode_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gcode")
+
+    def _load(path: str) -> str:
         try:
             with open(path) as f:
                 return f.read()
@@ -918,23 +952,57 @@ def main():
             print(f"ERROR: cannot read {path}: {e}", file=sys.stderr)
             sys.exit(1)
 
+    def _resolve_template(arg_path: Optional[str], printer_key: str, role: str) -> Optional[str]:
+        """Load template: explicit arg > printer gcode file > None (built-in fallback)."""
+        if arg_path is not None:
+            return _load(arg_path)
+        candidate = os.path.join(_gcode_dir, f"{printer_key.lower()}_{role}.gcode")
+        if os.path.exists(candidate):
+            return _load(candidate)
+        return None  # Generator will use DEFAULT_START_GCODE / DEFAULT_END_GCODE
+
+    # ── resolve printer preset (explicit args always win) ───────────────────────
+    ppreset = PRINTER_PRESETS[args.printer]
+    print(f"Printer: {args.printer}  "
+          f"bed {ppreset['bed_x']:.0f}×{ppreset['bed_y']:.0f} mm  "
+          f"max Z {ppreset['max_z']:.0f} mm",
+          file=sys.stderr)
+
+    start_tmpl = _resolve_template(args.start_gcode, args.printer, "start")
+    end_tmpl   = _resolve_template(args.end_gcode,   args.printer, "end")
+
+    # Warn only when actually falling back to the built-in Core One template
+    missing = []
+    if start_tmpl is None:
+        missing.append("start-gcode")
+    if end_tmpl is None:
+        missing.append("end-gcode")
+    if missing:
+        print(
+            f"WARNING: no {' or '.join(missing)} found for {args.printer} — "
+            f"falling back to built-in Core One template "
+            f"(parks at X242 Y211, Core One MBL commands).",
+            file=sys.stderr,
+        )
+
     # ── resolve filament preset (explicit args always win) ──────────────────────
-    preset = FILAMENT_PRESETS.get(args.filament, {}) if args.filament else {}
-    if preset:
-        print(f"Using {args.filament} preset: "
-              f"hotend {preset['hotend_temp']} °C, "
-              f"bed {preset['bed_temp']} °C, "
-              f"fan {preset['fan_speed']} %, "
-              f"retract {preset['retract_dist']} mm",
+    fpreset = FILAMENT_PRESETS.get(args.filament, {}) if args.filament else {}
+    if fpreset:
+        print(f"Filament: {args.filament}  "
+              f"hotend {fpreset['hotend_temp']} °C  "
+              f"bed {fpreset['bed_temp']} °C  "
+              f"fan {fpreset['fan_speed']} %  "
+              f"retract {fpreset['retract_dist']} mm",
               file=sys.stderr)
 
-    def _p(arg_val, key: str, fallback):
+    def _p(arg_val, key: str, fallback, source: dict = fpreset):
         """Return arg_val if explicitly set, else preset value, else fallback."""
-        return arg_val if arg_val is not None else preset.get(key, fallback)
+        return arg_val if arg_val is not None else source.get(key, fallback)
 
     cfg = Config(
-        bed_x              = args.bed_x,
-        bed_y              = args.bed_y,
+        bed_x              = _p(args.bed_x,  "bed_x",  ppreset["bed_x"],  ppreset),
+        bed_y              = _p(args.bed_y,  "bed_y",  ppreset["bed_y"],  ppreset),
+        max_z              = _p(args.max_z,  "max_z",  ppreset["max_z"],  ppreset),
         nozzle_dia         = args.nozzle_dia,
         filament_dia       = args.filament_dia,
         bed_temp           = _p(args.bed_temp,    "bed_temp",    60),
@@ -972,8 +1040,8 @@ def main():
 
     gen = Generator(
         cfg,
-        start_template = _load(args.start_gcode),
-        end_template   = _load(args.end_gcode),
+        start_template = start_tmpl,
+        end_template   = end_tmpl,
     )
     gcode = gen.generate()
 
