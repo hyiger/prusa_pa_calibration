@@ -462,6 +462,63 @@ class BaseGenerator:
             y += 2.0 * spacing
             lr = not lr
 
+    # ── 7-segment number rendering ─────────────────────────────────────────────
+
+    _SEGS: dict[str, tuple] = {
+        "0": (1, 1, 1, 1, 1, 1, 0),
+        "1": (0, 1, 1, 0, 0, 0, 0),
+        "2": (1, 1, 0, 1, 1, 0, 1),
+        "3": (1, 1, 1, 1, 0, 0, 1),
+        "4": (0, 1, 1, 0, 0, 1, 1),
+        "5": (1, 0, 1, 1, 0, 1, 1),
+        "6": (1, 0, 1, 1, 1, 1, 1),
+        "7": (1, 1, 1, 0, 0, 0, 0),
+        "8": (1, 1, 1, 1, 1, 1, 1),
+        "9": (1, 1, 1, 1, 0, 1, 1),
+    }
+    _SEG_LEN: float = 2.0   # mm — length of each 7-segment bar
+    _SEG_GAP: float = 1.0   # mm — gap between characters
+
+    def _digit_width(self) -> float:
+        return self._SEG_LEN + self._SEG_GAP
+
+    def _num_tab_height(self) -> float:
+        """Vertical space needed for a row of number labels."""
+        return self._SEG_LEN * 2.0 + 3.0   # glyph height + padding
+
+    def _draw_digit(self, x: float, y: float, ch: str,
+                    lh: float, lw: float, spd: float) -> float:
+        """Draw a single glyph at bottom-left (x, y). Returns x-advance in mm."""
+        SL = self._SEG_LEN
+        if ch == ".":
+            self._travel(x, y)
+            self._line(x + 0.6, y, spd, lh, lw)
+            return 0.6 + self._SEG_GAP
+        if ch not in self._SEGS:
+            return self._digit_width()
+        t, tr, br, bot, bl, tl, mid = self._SEGS[ch]
+        if t:   self._travel(x,      y + 2*SL); self._line(x + SL, y + 2*SL, spd, lh, lw)
+        if tr:  self._travel(x + SL, y +   SL); self._line(x + SL, y + 2*SL, spd, lh, lw)
+        if br:  self._travel(x + SL, y       ); self._line(x + SL, y +   SL, spd, lh, lw)
+        if bot: self._travel(x,      y       ); self._line(x + SL, y,        spd, lh, lw)
+        if bl:  self._travel(x,      y       ); self._line(x,      y +   SL, spd, lh, lw)
+        if tl:  self._travel(x,      y +   SL); self._line(x,      y + 2*SL, spd, lh, lw)
+        if mid: self._travel(x,      y +   SL); self._line(x + SL, y +   SL, spd, lh, lw)
+        return self._digit_width()
+
+    def _draw_number(self, x: float, y: float, value: float,
+                     lh: float, lw: float, spd: float, *,
+                     no_leading_zeros: bool = False):
+        """Render a floating-point value as 7-segment glyphs starting at (x, y)."""
+        text = f"{value:.{_PA}f}".rstrip("0").rstrip(".")
+        if "." not in text and value != int(value):
+            text = f"{value:.1f}"
+        if no_leading_zeros and text.startswith("0."):
+            text = text[1:]
+        cx = x
+        for ch in text:
+            cx += self._draw_digit(cx, y, ch, lh, lw * 0.8, spd)
+
     # ── geometry helpers ───────────────────────────────────────────────────────
 
     def _m555(self, orig_x: float, orig_y: float,

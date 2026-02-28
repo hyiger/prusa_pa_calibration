@@ -66,6 +66,7 @@ class Config(CommonConfig):
     tower_width:    float = 20.0  # mm — X footprint of the tower body
     tower_depth:    float = 20.0  # mm — Y footprint of the tower body
     wall_count:     int   = 2     # perimeter walls per layer
+    label_tab:      bool  = True  # draw temperature label at each segment transition
 
 
 # ── Temperature tower generator ────────────────────────────────────────────────
@@ -118,8 +119,18 @@ class TowerGenerator(BaseGenerator):
             spacing_a = lw_a - c.first_layer_height * (1.0 - math.pi / 4.0)
             margin    = c.anchor_perimeters * spacing_a + 1.0  # anchor + 1 mm gap
 
-        full_w = c.tower_width  + 2.0 * margin
-        full_h = c.tower_depth  + 2.0 * margin
+        tower_area_w = c.tower_width + 2.0 * margin   # anchor footprint (no label)
+
+        # Label tab: 7-segment temperature digits printed to the right of the tower
+        if c.label_tab:
+            max_chars = len(str(max(abs(c.temp_start), abs(c.temp_end))))
+            tab_w     = max_chars * self._digit_width() + self._SEG_GAP
+            label_gap = 2.0
+        else:
+            tab_w = label_gap = 0.0
+
+        full_w = tower_area_w + label_gap + tab_w
+        full_h = c.tower_depth + 2.0 * margin
 
         # Warn if tower exceeds bed
         if full_w > c.bed_x or full_h > c.bed_y:
@@ -145,6 +156,13 @@ class TowerGenerator(BaseGenerator):
         tower_y0 = orig_y + margin
         tower_x1 = tower_x0 + c.tower_width
         tower_y1 = tower_y0 + c.tower_depth
+
+        # Label position: right of tower body, vertically centred in tower depth
+        if c.label_tab:
+            label_x = tower_x1 + label_gap
+            label_y = tower_y0 + (c.tower_depth - self._SEG_LEN * 2.0) / 2.0
+        else:
+            label_x = label_y = 0.0   # unused
 
         tmpl_vars = self._base_tmpl_vars(max_layer_z, orig_x, orig_y, full_w, full_h)
 
@@ -230,12 +248,12 @@ class TowerGenerator(BaseGenerator):
                 if c.anchor == "frame":
                     self._comment("Anchor frame")
                     self._anchor_frame(
-                        orig_x, orig_y, full_w, full_h,
+                        orig_x, orig_y, tower_area_w, full_h,
                         lh, lw_a, c.anchor_perimeters, speed,
                     )
                 elif c.anchor == "layer":
                     self._comment("Anchor layer (filled)")
-                    self._anchor_layer(orig_x, orig_y, full_w, full_h, lh, lw_a, speed)
+                    self._anchor_layer(orig_x, orig_y, tower_area_w, full_h, lh, lw_a, speed)
 
             # Tower walls: wall_count concentric rectangles
             ws = wall_spacing_fl if is_first else wall_spacing
@@ -248,6 +266,11 @@ class TowerGenerator(BaseGenerator):
                 if wx0 >= wx1 or wy0 >= wy1:
                     break
                 self._perimeter(wx0, wy0, wx1, wy1, speed, lh, lw)
+
+            # Temperature label at the first layer of each segment
+            if c.label_tab and layer_idx % layers_per_seg == 0:
+                self._comment(f"Label: {temp} °C")
+                self._draw_number(label_x, label_y, float(temp), lh, lw, speed)
 
         # ── end G-code ─────────────────────────────────────────────────────────
         self._blank()
@@ -315,6 +338,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Tower footprint depth (Y)")
     g.add_argument("--wall-count",     type=int,   default=2,    metavar="N",
                    help="Number of perimeter walls per layer")
+    g.add_argument("--no-label-tab", dest="label_tab", action="store_false",
+                   help="Disable per-segment temperature labels (default: enabled)")
 
     return p
 
@@ -363,6 +388,7 @@ def main():
         tower_width        = args.tower_width,
         tower_depth        = args.tower_depth,
         wall_count         = args.wall_count,
+        label_tab          = args.label_tab,
         anchor             = args.anchor,
         anchor_perimeters  = args.anchor_perimeters,
         show_lcd           = args.show_lcd,
