@@ -957,12 +957,20 @@ def main():
           f"bed {ppreset['bed_x']:.0f}×{ppreset['bed_y']:.0f} mm  "
           f"max Z {ppreset['max_z']:.0f} mm",
           file=sys.stderr)
-    if args.printer != _DEFAULT_PRINTER and not args.start_gcode:
-        print(
-            f"WARNING: built-in start/end G-code is tuned for the Core One. "
-            f"Use --start-gcode / --end-gcode for accurate {args.printer} output.",
-            file=sys.stderr,
-        )
+    if args.printer != _DEFAULT_PRINTER:
+        missing = []
+        if not args.start_gcode:
+            missing.append("--start-gcode")
+        if not args.end_gcode:
+            missing.append("--end-gcode")
+        if missing:
+            print(
+                f"WARNING: built-in {' and '.join(missing).replace('--', '')} "
+                f"{'is' if len(missing) == 1 else 'are'} tuned for the Core One "
+                f"(parks at X242 Y211, Core One MBL commands). "
+                f"Provide {' and '.join(missing)} for accurate {args.printer} output.",
+                file=sys.stderr,
+            )
 
     # ── resolve filament preset (explicit args always win) ──────────────────────
     fpreset = FILAMENT_PRESETS.get(args.filament, {}) if args.filament else {}
