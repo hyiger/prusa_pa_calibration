@@ -43,7 +43,7 @@ _XY = 4   # decimal places for X/Y coordinates
 _E  = 5   # decimal places for extrusion amounts
 
 # ── Prusa Core One bed size ────────────────────────────────────────────────────
-BED_X       = 220.0
+BED_X       = 250.0
 BED_Y       = 220.0
 MAX_Z       = 270.0   # Core One build height
 
@@ -71,8 +71,8 @@ FILAMENT_PRESETS: dict[str, dict] = {
 PRINTER_PRESETS: dict[str, dict] = {
     "MINI":     dict(bed_x=180.0, bed_y=180.0, max_z=180.0, model="MINI"),
     "MK4S":     dict(bed_x=250.0, bed_y=210.0, max_z=220.0, model="MK4S"),
-    "COREONE":  dict(bed_x=220.0, bed_y=220.0, max_z=270.0, model="COREONE"),
-    "COREONEL": dict(bed_x=360.0, bed_y=360.0, max_z=370.0, model="COREONEL"),
+    "COREONE":  dict(bed_x=250.0, bed_y=220.0, max_z=270.0, model="COREONE"),
+    "COREONEL": dict(bed_x=300.0, bed_y=300.0, max_z=330.0, model="COREONEL"),
     "XL":       dict(bed_x=360.0, bed_y=360.0, max_z=360.0, model="XL"),
 }
 _DEFAULT_PRINTER = "COREONE"

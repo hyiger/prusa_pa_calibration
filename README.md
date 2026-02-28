@@ -8,7 +8,7 @@ Supports: Mini, MK4S, Core One (default), Core One L, XL.
 
 - Python 3.10+
 - No external dependencies (pure stdlib)
-- Prusa printer with Marlin firmware and M900 Linear Advance
+- Prusa printer with Marlin firmware and M900 Linear Advance support
 
 ## Quick Start
 
@@ -62,8 +62,8 @@ Sets bed dimensions and max build height. Default: `COREONE`.
 |---|---|---|---|
 | `MINI` | 180×180 mm | 180 mm | Bowden — increase `--retract-dist` |
 | `MK4S` | 250×210 mm | 220 mm | |
-| `COREONE` | 220×220 mm | 270 mm | **Default** |
-| `COREONEL` | 360×360 mm | 370 mm | |
+| `COREONE` | 250×220 mm | 270 mm | **Default** |
+| `COREONEL` | 300×300 mm | 330 mm | |
 | `XL` | 360×360 mm | 360 mm | |
 
 > **Note:** The built-in start/end G-code is tuned for the Core One. For all other printers, provide `--start-gcode` / `--end-gcode` with your printer's correct sequence.
