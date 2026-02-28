@@ -47,6 +47,21 @@ BED_X       = 220.0
 BED_Y       = 220.0
 MAX_Z       = 270.0   # Core One build height
 
+# ── Filament presets ───────────────────────────────────────────────────────────
+# Each entry overrides only the parameters that differ from PLA defaults.
+# Explicit CLI flags always win over preset values.
+#
+# Fields: hotend_temp, bed_temp, fan_speed (%), first_layer_fan (%), retract_dist (mm)
+FILAMENT_PRESETS: dict[str, dict] = {
+    "PLA":  dict(hotend_temp=215, bed_temp=60,  fan_speed=100, first_layer_fan=0, retract_dist=0.6),
+    "PETG": dict(hotend_temp=235, bed_temp=85,  fan_speed=50,  first_layer_fan=0, retract_dist=0.8),
+    "ABS":  dict(hotend_temp=245, bed_temp=100, fan_speed=0,   first_layer_fan=0, retract_dist=1.0),
+    "ASA":  dict(hotend_temp=255, bed_temp=100, fan_speed=20,  first_layer_fan=0, retract_dist=1.0),
+    "PA":   dict(hotend_temp=260, bed_temp=90,  fan_speed=0,   first_layer_fan=0, retract_dist=1.0),
+    "TPU":  dict(hotend_temp=230, bed_temp=60,  fan_speed=50,  first_layer_fan=0, retract_dist=0.0),
+    "PC":   dict(hotend_temp=275, bed_temp=110, fan_speed=0,   first_layer_fan=0, retract_dist=1.0),
+}
+
 # ── Default start / end G-code ─────────────────────────────────────────────────
 # Derived from PrusaSlicer's Prusa Core One start G-code.
 # PrusaSlicer conditionals have been resolved to their common-case concrete values:
@@ -789,6 +804,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    p.add_argument(
+        "--filament",
+        type=str.upper,
+        choices=list(FILAMENT_PRESETS),
+        metavar="TYPE",
+        help=(
+            "Filament preset — sets hotend/bed temps, fan speed, and retraction. "
+            "Explicit flags override the preset. "
+            f"Choices: {', '.join(FILAMENT_PRESETS)}"
+        ),
+    )
+
     g = p.add_argument_group("Linear Advance")
     g.add_argument("--la-start", type=float, default=0.0, metavar="K",
                    help="Start K value")
@@ -798,8 +825,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="K increment per pattern (use 0.1 for fine-grained scan)")
 
     g = p.add_argument_group("Temperatures")
-    g.add_argument("--hotend-temp", type=int, default=215, metavar="°C")
-    g.add_argument("--bed-temp",    type=int, default=60,  metavar="°C")
+    g.add_argument("--hotend-temp", type=int, default=None, metavar="°C",
+                   help="Hotend temperature (default: from --filament preset, or 215)")
+    g.add_argument("--bed-temp",    type=int, default=None, metavar="°C",
+                   help="Bed temperature (default: from --filament preset, or 60)")
 
     g = p.add_argument_group("Printer / toolhead")
     g.add_argument("--nozzle-dia",   type=float, default=0.4,   metavar="mm")
@@ -823,7 +852,8 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--extrusion-multiplier", type=float, default=0.98, metavar="ratio")
 
     g = p.add_argument_group("Retraction")
-    g.add_argument("--retract-dist",    type=float, default=0.6,  metavar="mm")
+    g.add_argument("--retract-dist",    type=float, default=None, metavar="mm",
+                   help="Retraction distance (default: from --filament preset, or 0.6)")
     g.add_argument("--retract-speed",   type=float, default=45.0, metavar="mm/s")
     g.add_argument("--unretract-speed", type=float, default=45.0, metavar="mm/s")
     g.add_argument("--zhop",            type=float, default=0.1,
@@ -849,9 +879,12 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Suppress M117 display messages")
     g.add_argument("--no-leading-zeros", action="store_true",
                    help='Print "0.4" as ".4" in labels')
-    g.add_argument("--fan-speed",       type=int, default=100, metavar="%",
-                   help="Part-cooling fan speed from layer 2 onward")
-    g.add_argument("--first-layer-fan", type=int, default=0,   metavar="%")
+    g.add_argument("--fan-speed",       type=int, default=None, metavar="%",
+                   help="Part-cooling fan speed from layer 2 onward "
+                        "(default: from --filament preset, or 100)")
+    g.add_argument("--first-layer-fan", type=int, default=None, metavar="%",
+                   help="Part-cooling fan speed on first layer "
+                        "(default: from --filament preset, or 0)")
 
     g = p.add_argument_group("G-code templates (override built-in Prusa defaults)")
     g.add_argument("--start-gcode", metavar="FILE",
@@ -885,13 +918,27 @@ def main():
             print(f"ERROR: cannot read {path}: {e}", file=sys.stderr)
             sys.exit(1)
 
+    # ── resolve filament preset (explicit args always win) ──────────────────────
+    preset = FILAMENT_PRESETS.get(args.filament, {}) if args.filament else {}
+    if preset:
+        print(f"Using {args.filament} preset: "
+              f"hotend {preset['hotend_temp']} °C, "
+              f"bed {preset['bed_temp']} °C, "
+              f"fan {preset['fan_speed']} %, "
+              f"retract {preset['retract_dist']} mm",
+              file=sys.stderr)
+
+    def _p(arg_val, key: str, fallback):
+        """Return arg_val if explicitly set, else preset value, else fallback."""
+        return arg_val if arg_val is not None else preset.get(key, fallback)
+
     cfg = Config(
         bed_x              = args.bed_x,
         bed_y              = args.bed_y,
         nozzle_dia         = args.nozzle_dia,
         filament_dia       = args.filament_dia,
-        bed_temp           = args.bed_temp,
-        hotend_temp        = args.hotend_temp,
+        bed_temp           = _p(args.bed_temp,    "bed_temp",    60),
+        hotend_temp        = _p(args.hotend_temp,  "hotend_temp", 215),
         la_start           = args.la_start,
         la_end             = args.la_end,
         la_step            = args.la_step,
@@ -903,7 +950,7 @@ def main():
         travel_speed       = args.travel_speed,
         line_width_pct     = args.line_width_pct,
         extrusion_multiplier = args.extrusion_multiplier,
-        retract_dist       = args.retract_dist,
+        retract_dist       = _p(args.retract_dist,    "retract_dist",    0.6),
         retract_speed      = args.retract_speed,
         unretract_speed    = args.unretract_speed,
         zhop               = args.zhop,
@@ -916,8 +963,8 @@ def main():
         number_tab         = args.number_tab,
         show_lcd           = args.show_lcd,
         no_leading_zeros   = args.no_leading_zeros,
-        fan_speed          = args.fan_speed,
-        first_layer_fan    = args.first_layer_fan,
+        fan_speed          = _p(args.fan_speed,       "fan_speed",       100),
+        first_layer_fan    = _p(args.first_layer_fan, "first_layer_fan", 0),
         start_gcode_file   = args.start_gcode,
         end_gcode_file     = args.end_gcode,
         output             = args.output,
