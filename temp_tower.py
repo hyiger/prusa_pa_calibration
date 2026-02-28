@@ -263,6 +263,19 @@ class TowerGenerator(BaseGenerator):
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
+def _positive_float(value: str) -> float:
+    """argparse type that accepts only strictly positive floats."""
+    try:
+        v = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid float value: {value!r}")
+    if v <= 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a positive number, got {value!r}"
+        )
+    return v
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Generate temperature tower calibration G-code for Prusa printers",
@@ -292,7 +305,7 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--temp-end",   type=int, default=None, metavar="°C",
                    help="Top segment temperature "
                         "(default: temp-start − 30)")
-    g.add_argument("--temp-step",  type=float, default=5.0, metavar="°C",
+    g.add_argument("--temp-step",  type=_positive_float, default=5.0, metavar="°C",
                    help="Temperature change per segment (always positive)")
     g.add_argument("--segment-height", type=float, default=5.0, metavar="mm",
                    help="Height of each temperature segment")
