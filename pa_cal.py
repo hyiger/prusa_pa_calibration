@@ -1007,6 +1007,16 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--prusalink-print", action="store_true",
                    help="Start printing immediately after upload")
 
+    g = p.add_argument_group("PrusaConnect upload (cloud)")
+    g.add_argument("--prusaconnect-key", metavar="KEY",
+                   help="PrusaConnect API key (connect.prusa3d.com → Printer detail → API Key). "
+                        "Uploads the generated G-code to PrusaConnect after generation.")
+    g.add_argument("--prusaconnect-filename", metavar="NAME",
+                   help="Filename to store in PrusaConnect "
+                        "(default: basename of -o, or pa_cal.gcode / pa_cal.bgcode)")
+    g.add_argument("--prusaconnect-print", action="store_true",
+                   help="Start printing immediately after upload")
+
     return p
 
 
@@ -1162,6 +1172,30 @@ def main():
             key=args.prusalink_key,
             filename=remote_name,
             start_print=args.prusalink_print,
+        )
+
+    # ── upload via PrusaConnect (cloud) ────────────────────────────────────────
+    if args.prusaconnect_key:
+        if args.prusaconnect_filename:
+            remote_name = args.prusaconnect_filename
+        elif args.output:
+            remote_name = os.path.basename(args.output)
+        else:
+            remote_name = "pa_cal.bgcode" if args.binary else "pa_cal.gcode"
+
+        if args.binary:
+            buf = io.BytesIO()
+            _write_bgcode(gcode, buf)
+            upload_data = buf.getvalue()
+        else:
+            upload_data = gcode.encode("utf-8")
+
+        _upload_prusalink(
+            upload_data,
+            url="https://connect.prusa3d.com",
+            key=args.prusaconnect_key,
+            filename=remote_name,
+            start_print=args.prusaconnect_print,
         )
 
 

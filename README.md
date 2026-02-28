@@ -181,7 +181,32 @@ python3 pa_cal.py --binary -o pa_cal.bgcode \
 
 > **Finding your API key:** Open the printer's web UI, go to **Settings → API Key**, and copy the key shown there.
 
-> **PrusaConnect (cloud):** The PrusaConnect cloud API does not have a publicly documented file-upload endpoint. To send a print job remotely, use PrusaLink from a machine on the same network as the printer, or upload the file manually through the PrusaConnect web interface.
+### PrusaConnect Upload (cloud)
+
+Upload directly to [connect.prusa3d.com](https://connect.prusa3d.com) so you can trigger a print from anywhere without needing to be on the same network as the printer. Uses the same API as PrusaLink, just routed through the cloud.
+
+| Option | Description |
+|---|---|
+| `--prusaconnect-key KEY` | API key from connect.prusa3d.com (Printer detail → API Key) |
+| `--prusaconnect-filename NAME` | Remote filename (default: basename of `-o`, or `pa_cal.gcode`) |
+| `--prusaconnect-print` | Start printing immediately after upload |
+
+```bash
+# Generate and upload to PrusaConnect
+python3 pa_cal.py --prusaconnect-key abc123
+
+# Upload and start print
+python3 pa_cal.py -o pa_cal.gcode \
+  --prusaconnect-key abc123 \
+  --prusaconnect-print
+
+# Upload bgcode and start print
+python3 pa_cal.py --binary -o pa_cal.bgcode \
+  --prusaconnect-key abc123 \
+  --prusaconnect-print
+```
+
+> **Finding your API key:** Log in to [connect.prusa3d.com](https://connect.prusa3d.com), open the **Printer detail** page for your printer, and copy the **API Key** shown there.
 
 ### Custom Start / End G-code
 
