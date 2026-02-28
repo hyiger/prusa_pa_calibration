@@ -86,11 +86,22 @@ class TowerGenerator(BaseGenerator):
         lw_a = self._alw   # anchor line width
 
         # ── segment planning ───────────────────────────────────────────────────
-        direction  = 1 if c.temp_end >= c.temp_start else -1
-        span       = abs(c.temp_end - c.temp_start)
-        n_segs     = round(span / c.temp_step) + 1
-        temps      = [round(c.temp_start + i * direction * c.temp_step)
-                      for i in range(n_segs)]
+        direction     = 1 if c.temp_end >= c.temp_start else -1
+        span          = abs(c.temp_end - c.temp_start)
+        n_full_steps  = int(span / c.temp_step)   # steps that stay within range
+        temps         = [round(c.temp_start + i * direction * c.temp_step)
+                         for i in range(n_full_steps + 1)]
+        # Always land exactly on temp_end; warn when span is not a clean multiple
+        if temps[-1] != c.temp_end:
+            last_step = abs(c.temp_end - temps[-1])
+            print(
+                f"WARNING: span {span} °C is not a multiple of step "
+                f"{c.temp_step} °C; last segment step is {last_step} °C "
+                f"(ends at {c.temp_end} °C).",
+                file=sys.stderr,
+            )
+            temps.append(c.temp_end)
+        n_segs = len(temps)
 
         # Layers per segment (first-layer height counts as one layer)
         layers_per_seg = max(1, round(c.segment_height / c.layer_height))
