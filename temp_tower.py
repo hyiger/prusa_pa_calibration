@@ -306,8 +306,11 @@ def main():
         """Return arg_val if explicitly set, else preset value, else fallback."""
         return arg_val if arg_val is not None else source.get(key, fallback)
 
-    # Resolve temperature range: temp_start from filament preset, temp_end derived
-    temp_start = _p(args.temp_start, "hotend_temp", 215)
+    # Resolve temperature range.
+    # Priority: --temp-start > --hotend-temp > filament preset > 215
+    temp_start = (args.temp_start
+                  if args.temp_start is not None
+                  else _p(args.hotend_temp, "hotend_temp", 215))
     temp_end   = args.temp_end if args.temp_end is not None else temp_start - 30
 
     cfg = Config(
