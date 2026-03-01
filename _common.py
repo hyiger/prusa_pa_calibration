@@ -790,20 +790,21 @@ def handle_output(gcode: str, args, default_stem: str) -> None:
             sys.stdout.write(gcode)
 
     def _upload_data() -> bytes:
-        if args.binary:
-            buf = io.BytesIO()
-            _write_bgcode(gcode, buf)
-            return buf.getvalue()
-        return gcode.encode("utf-8")
+        # Always upload as bgcode (DEFLATE-compressed) regardless of local
+        # output format — PrusaLink/PrusaConnect accept bgcode natively and
+        # the compressed payload avoids HTTP 413 errors on large files.
+        buf = io.BytesIO()
+        _write_bgcode(gcode, buf)
+        return buf.getvalue()
 
     def _remote_name(service: str) -> str:
         explicit = getattr(args, f"{service}_filename", None)
         if explicit:
             return explicit
         if args.output:
-            return os.path.basename(args.output)
-        ext = ".bgcode" if args.binary else ".gcode"
-        return default_stem + ext
+            stem = os.path.splitext(os.path.basename(args.output))[0]
+            return stem + ".bgcode"
+        return default_stem + ".bgcode"
 
     if getattr(args, "prusalink_url", None):
         if not getattr(args, "prusalink_key", None):
