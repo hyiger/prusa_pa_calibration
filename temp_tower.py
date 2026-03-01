@@ -331,7 +331,9 @@ class TowerGenerator(BaseGenerator):
                 sx0 = _r(short_x1 - (5.0 + local_z / tan_short), _XY)
                 lx1 = _r(long_x0  + 20.0 + local_z / tan_long,   _XY)
 
-                wall_fill = self._grid_layer if c.grid_walls else self._anchor_layer
+                is_bridge_layer = local_z >= c.module_height - c.bridge_thick - 1e-6
+                wall_fill = (self._anchor_layer if (not c.grid_walls or is_bridge_layer)
+                             else self._grid_layer)
 
                 # Short overhang wall — growing leftward
                 short_w = short_x1 - sx0
