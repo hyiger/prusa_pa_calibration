@@ -84,6 +84,7 @@ class Config(CommonConfig):
     # Face text: 7-segment temperature number on the front face of the long wall
     label_tab:     bool  = True   # embed temperature label in the long-wall face
     grid_walls:    bool  = False  # use crosshatch grid infill for overhang walls
+    wall_density:  int   = 50    # infill density % when --grid-walls is active
 
 
 # ── Temperature tower generator ────────────────────────────────────────────────
@@ -101,7 +102,7 @@ class TowerGenerator(BaseGenerator):
         """Filled rectangle: 2 perimeters + crosshatch grid infill (~50%)."""
         self._anchor_frame(x0, y0, sx, sy, lh, lw, 2, speed)
         base_spacing = lw - lh * (1.0 - math.pi / 4.0)
-        pitch = base_spacing * 2          # 2× pitch → ~50% density per direction
+        pitch = base_spacing * (100.0 / self.cfg.wall_density)
         ix0 = x0 + 2 * base_spacing
         iy0 = y0 + 2 * base_spacing
         ix1 = x0 + sx - 2 * base_spacing
@@ -441,7 +442,9 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-label-tab", dest="label_tab", action="store_false",
                    help="Disable temperature labels on long-wall face (default: enabled)")
     g.add_argument("--grid-walls", dest="grid_walls", action="store_true",
-                   help="Use crosshatch grid infill (~50%%) for overhang walls instead of solid")
+                   help="Use crosshatch grid infill for overhang walls instead of solid")
+    g.add_argument("--wall-density", type=int, default=50, metavar="%",
+                   help="Infill density %% for --grid-walls (default: 50)")
 
     return p
 
@@ -496,6 +499,7 @@ def main():
         zhop               = args.zhop,
         label_tab          = args.label_tab,
         grid_walls         = args.grid_walls,
+        wall_density       = args.wall_density,
         anchor             = args.anchor,
         anchor_perimeters  = args.anchor_perimeters,
         show_lcd           = args.show_lcd,
