@@ -49,81 +49,24 @@ PRINTER_PRESETS: dict[str, dict] = {
 }
 _DEFAULT_PRINTER = "COREONE"
 
-# ── Default start / end G-code ─────────────────────────────────────────────────
-# Derived from PrusaSlicer's Prusa Core One start G-code.
-# Variables in {braces} are substituted; everything else is literal.
-DEFAULT_START_GCODE = """\
-M17 ; enable steppers
-M862.1 P{nozzle_dia} ; nozzle check
-M862.3 P "COREONE" ; printer model check
-M862.5 P2 ; g-code level check
-M862.6 P"Input shaper" ; FW feature check
-M115 U6.4.0+11974
-M555 X{m555_x} Y{m555_y} W{m555_w} H{m555_h}
-G90 ; use absolute coordinates
-M83 ; extruder relative mode
-M140 S{bed_temp} ; set bed temp
-M109 R{mbl_temp} ; preheat nozzle to no-ooze temp for bed leveling
-M84 E ; turn off E motor
-G28 ; home all without mesh bed level
-M104 S100 ; set idle temp
-M190 R{bed_temp} ; wait for bed temp
-{cool_fan}
-G0 Z40 F10000
-M104 S100 ; keep idle temp
-M190 R{bed_temp} ; wait for bed temp (confirm after Z move)
-M107
-G29 G ; absorb heat
-M109 R{mbl_temp} ; wait for MBL temp
-M302 S155 ; lower cold extrusion limit to 155 C
-G1 E-2 F2400 ; retraction
-M84 E ; turn off E motor
-G29 P9 X208 Y-2.5 W32 H4
-;
-; MBL
-;
-M84 E ; turn off E motor
-G29 P1 ; invalidate mbl and probe print area
-G29 P1 X150 Y0 W100 H20 C ; probe near purge place
-G29 P3.2 ; interpolate mbl probes
-G29 P3.13 ; extrapolate mbl outside probe area
-G29 A ; activate mbl
-; prepare for purge
-M104 S{hotend_temp}
-G0 X249 Y-2.5 Z15 F4800 ; move away and ready for the purge
-M109 S{hotend_temp}
-G92 E0
-M569 S0 E ; set spreadcycle mode for extruder
-M591 S0 ; disable stuck filament detection
-;
-; Purge line
-;
-G92 E0 ; reset extruder position
-G1 E2 F2400 ; deretraction after the initial one
-G0 E5 X235 Z0.2 F500 ; purge
-G0 X225 E4 F500 ; purge
-G0 X215 E4 F650 ; purge
-G0 X205 E4 F800 ; purge
-G0 X202 Z0.05 F8000 ; wipe, move close to the bed
-G0 X199 Z0.2 F8000 ; wipe, move away from the bed
-M591 R ; restore stuck filament detection
-G92 E0
-M221 S100 ; set flow to 100%
-"""
+# ── Built-in G-code directory ──────────────────────────────────────────────────
+# Default start/end templates live in gcode/{printer}_{start|end}.gcode.
+# coreone_start.gcode / coreone_end.gcode are used as the fallback default.
+_GCODE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gcode")
 
-DEFAULT_END_GCODE = """\
-G1 Z{park_z} F720 ; move print head up
-M104 S0 ; turn off hotend
-M140 S0 ; turn off heatbed
-M141 S0 ; disable chamber temp control
-M107 ; turn off fan
-G1 X242 Y211 F10200 ; park
-G4 ; wait
-M572 S0 ; reset pressure advance (ignored on Marlin)
-M900 K0 ; reset Linear Advance
-M84 X Y E ; disable motors
-; max_layer_z = {max_layer_z}
-"""
+
+def _builtin_gcode(name: str) -> str:
+    """Load a built-in G-code template from the gcode/ directory.
+
+    Exits with an error message if the file cannot be read.
+    """
+    path = os.path.join(_GCODE_DIR, name)
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError as e:
+        print(f"ERROR: cannot read built-in G-code template {path}: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 # ── Utility functions ──────────────────────────────────────────────────────────
@@ -719,8 +662,8 @@ class BaseGenerator:
         self.cfg = cfg
         self._st  = _State()
         self._buf: list[str] = []
-        self._start_tmpl = start_template if start_template is not None else DEFAULT_START_GCODE
-        self._end_tmpl   = end_template   if end_template   is not None else DEFAULT_END_GCODE
+        self._start_tmpl = start_template if start_template is not None else _builtin_gcode("coreone_start.gcode")
+        self._end_tmpl   = end_template   if end_template   is not None else _builtin_gcode("coreone_end.gcode")
 
         c = cfg
         self._lw  = c.nozzle_dia * (c.line_width_pct / 100.0)
@@ -971,10 +914,10 @@ def add_common_args(p: argparse.ArgumentParser, default_stem: str = "output") ->
         default=_DEFAULT_PRINTER,
         metavar="MODEL",
         help=(
-            "Printer model — sets bed size and max Z height. "
+            "Printer model — sets bed size and max Z height, and selects the "
+            "matching start/end G-code from the gcode/ directory. "
             f"Choices: {', '.join(PRINTER_PRESETS)}  "
-            f"(default: {_DEFAULT_PRINTER}). "
-            "Non-Core-One printers should also supply --start-gcode / --end-gcode."
+            f"(default: {_DEFAULT_PRINTER})."
         ),
     )
     p.add_argument(
@@ -1090,8 +1033,6 @@ def resolve_presets(args, script_dir: str) -> tuple:
     Prints a summary line to stderr for each resolved preset.
     Returns (ppreset, fpreset, start_tmpl, end_tmpl).
     """
-    _gcode_dir = os.path.join(script_dir, "gcode")
-
     def _load(path: str) -> str:
         try:
             with open(path) as f:
@@ -1100,14 +1041,22 @@ def resolve_presets(args, script_dir: str) -> tuple:
             print(f"ERROR: cannot read {path}: {e}", file=sys.stderr)
             sys.exit(1)
 
-    def _resolve_template(arg_path: Optional[str], printer_key: str, role: str) -> Optional[str]:
-        """Load template: explicit arg > printer gcode file > None (built-in fallback)."""
+    def _resolve_template(arg_path: Optional[str], printer_key: str, role: str) -> str:
+        """Load template: explicit arg > printer gcode file > Core One default."""
         if arg_path is not None:
             return _load(arg_path)
-        candidate = os.path.join(_gcode_dir, f"{printer_key.lower()}_{role}.gcode")
+        candidate = os.path.join(_GCODE_DIR, f"{printer_key.lower()}_{role}.gcode")
         if os.path.exists(candidate):
             return _load(candidate)
-        return None
+        # No printer-specific file — fall back to the Core One default with a warning.
+        if printer_key != "COREONE":
+            print(
+                f"WARNING: no gcode/{printer_key.lower()}_{role}.gcode found — "
+                f"using Core One default (gcode/coreone_{role}.gcode). "
+                f"Supply --{role}-gcode to override.",
+                file=sys.stderr,
+            )
+        return _builtin_gcode(f"coreone_{role}.gcode")
 
     ppreset = PRINTER_PRESETS[args.printer]
     print(f"Printer: {args.printer}  "
@@ -1117,19 +1066,6 @@ def resolve_presets(args, script_dir: str) -> tuple:
 
     start_tmpl = _resolve_template(getattr(args, "start_gcode", None), args.printer, "start")
     end_tmpl   = _resolve_template(getattr(args, "end_gcode",   None), args.printer, "end")
-
-    missing = []
-    if start_tmpl is None:
-        missing.append("start-gcode")
-    if end_tmpl is None:
-        missing.append("end-gcode")
-    if missing:
-        print(
-            f"WARNING: no {' or '.join(missing)} found for {args.printer} — "
-            f"falling back to built-in Core One template "
-            f"(parks at X242 Y211, Core One MBL commands).",
-            file=sys.stderr,
-        )
 
     fpreset = FILAMENT_PRESETS.get(args.filament, {}) if args.filament else {}
     if fpreset:
