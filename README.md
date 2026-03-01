@@ -4,8 +4,8 @@ Python tools that generate calibration G-code for Prusa printers. No external de
 
 | Script | Purpose |
 |---|---|
-| `pa_cal.py` | Linear Advance (PA/K) calibration — V-shaped corner patterns |
-| `temp_tower.py` | Temperature tower — rectangular tower with per-segment temperatures |
+| `pa_calibration.py` | Linear Advance (PA/K) calibration — V-shaped corner patterns |
+| `temperature_tower.py` | Temperature tower — rectangular tower with per-segment temperatures |
 
 Both scripts share the same printer/filament presets, retraction options, and upload flags.
 
@@ -19,7 +19,7 @@ Supports: Mini, MK4S, Core One (default), Core One L, XL.
 
 ---
 
-## pa_cal.py — Linear Advance Calibration
+## pa_calibration.py — Linear Advance Calibration
 
 Prints a row of V-shaped corner patterns, each at a different K value. The pattern with the sharpest corner is your ideal pressure-advance setting.
 
@@ -27,19 +27,19 @@ Prints a row of V-shaped corner patterns, each at a different K value. The patte
 
 ```bash
 # Coarse scan: K = 0, 1, 2, 3, 4 (Core One, PLA defaults)
-python3 pa_cal.py -o coarse.gcode
+python3 pa_calibration.py -o coarse.gcode
 
 # Fine scan around your winner (e.g. K=2 looked best)
-python3 pa_cal.py --la-start 1.5 --la-end 2.5 --la-step 0.1 --side-length 11 -o fine.gcode
+python3 pa_calibration.py --la-start 1.5 --la-end 2.5 --la-step 0.1 --side-length 11 -o fine.gcode
 
 # PETG on a Core One
-python3 pa_cal.py --filament PETG -o petg.gcode
+python3 pa_calibration.py --filament PETG -o petg.gcode
 
 # PETG on an MK4S
-python3 pa_cal.py --printer MK4S --filament PETG -o mk4s_petg.gcode
+python3 pa_calibration.py --printer MK4S --filament PETG -o mk4s_petg.gcode
 
 # Binary G-code (.bgcode) for SD card
-python3 pa_cal.py -o la_cal.bgcode --binary
+python3 pa_calibration.py -o la_cal.bgcode --binary
 ```
 
 ### How to Read the Results
@@ -54,7 +54,7 @@ Print the file, then examine the V-shaped corners under good lighting:
 
 Run a coarse scan first (default K=0–4, step=1), identify the best-looking column, then run a fine scan (step=0.1) centred on that value.
 
-### pa_cal.py Options
+### pa_calibration.py Options
 
 #### Linear Advance
 | Option | Default | Description |
@@ -80,7 +80,7 @@ Run a coarse scan first (default K=0–4, step=1), identify the best-looking col
 
 ---
 
-## temp_tower.py — Temperature Tower
+## temperature_tower.py — Temperature Tower
 
 Prints a rectangular tower split into horizontal segments, each at a different hotend temperature. Examine surface quality, bridging, and stringing at each band to find your ideal temperature.
 
@@ -88,19 +88,19 @@ Prints a rectangular tower split into horizontal segments, each at a different h
 
 ```bash
 # PLA: 215 → 185 °C in 5 °C steps (default)
-python3 temp_tower.py -o temp_tower.gcode
+python3 temperature_tower.py -o temp_tower.gcode
 
 # PETG on Core One
-python3 temp_tower.py --filament PETG -o petg_tower.gcode
+python3 temperature_tower.py --filament PETG -o petg_tower.gcode
 
 # PETG with explicit range
-python3 temp_tower.py --filament PETG --temp-start 240 --temp-end 210 -o petg_tower.gcode
+python3 temperature_tower.py --filament PETG --temp-start 240 --temp-end 210 -o petg_tower.gcode
 
 # ABS on MK4S
-python3 temp_tower.py --printer MK4S --filament ABS -o abs_tower.gcode
+python3 temperature_tower.py --printer MK4S --filament ABS -o abs_tower.gcode
 
 # Fine scan around 230 °C
-python3 temp_tower.py --temp-start 235 --temp-end 225 --temp-step 2 -o fine_tower.gcode
+python3 temperature_tower.py --temp-start 235 --temp-end 225 --temp-step 2 -o fine_tower.gcode
 ```
 
 ### How to Read the Results
@@ -115,7 +115,7 @@ Print the tower and examine each horizontal band:
 
 The bottom segment is `--temp-start`, the top segment is `--temp-end`. Work from bottom (hotter) to top (cooler) by default.
 
-### temp_tower.py Options
+### temperature_tower.py Options
 
 | Option | Default | Description |
 |---|---|---|
@@ -229,10 +229,10 @@ Upload the generated file directly to a printer running PrusaLink (the embedded 
 
 ```bash
 # Generate PA calibration and upload
-python3 pa_cal.py --prusalink-url http://192.168.1.100 --prusalink-key abc123 --prusalink-print
+python3 pa_calibration.py --prusalink-url http://192.168.1.100 --prusalink-key abc123 --prusalink-print
 
 # Generate temperature tower and upload
-python3 temp_tower.py --filament PETG --prusalink-url http://192.168.1.100 --prusalink-key abc123
+python3 temperature_tower.py --filament PETG --prusalink-url http://192.168.1.100 --prusalink-key abc123
 ```
 
 > **Finding your API key:** Open the printer's web UI, go to **Settings → API Key**, and copy the key shown there.
@@ -248,8 +248,8 @@ Upload directly to [connect.prusa3d.com](https://connect.prusa3d.com) so you can
 | `--prusaconnect-print` | Start printing immediately after upload |
 
 ```bash
-python3 pa_cal.py --prusaconnect-key abc123 --prusaconnect-print
-python3 temp_tower.py --filament PETG --prusaconnect-key abc123 --prusaconnect-print
+python3 pa_calibration.py --prusaconnect-key abc123 --prusaconnect-print
+python3 temperature_tower.py --filament PETG --prusaconnect-key abc123 --prusaconnect-print
 ```
 
 > **Finding your API key:** Log in to [connect.prusa3d.com](https://connect.prusa3d.com), open the **Printer detail** page for your printer, and copy the **API Key** shown there.
@@ -259,8 +259,8 @@ python3 temp_tower.py --filament PETG --prusaconnect-key abc123 --prusaconnect-p
 The built-in start/end G-code is derived from PrusaSlicer's Core One profile. Override with:
 
 ```bash
-python3 pa_cal.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.gcode
-python3 temp_tower.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.gcode
+python3 pa_calibration.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.gcode
+python3 temperature_tower.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.gcode
 ```
 
 Template variables available in custom files:

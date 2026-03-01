@@ -1,17 +1,17 @@
-"""Unit tests for pa_cal.py — Linear Advance calibration generator."""
+"""Unit tests for pa_calibration.py — Linear Advance calibration generator."""
 
 import math
 import unittest
 from unittest import mock
 
-from pa_cal import Config, Generator
+from pa_calibration import Config, Generator
 from _common import _PA, _r
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def _cfg(**overrides):
-    """Minimal pa_cal Config for fast tests (2 layers, short range)."""
+    """Minimal pa_calibration Config for fast tests (2 layers, short range)."""
     defaults = dict(layer_count=2, la_end=2.0, la_step=1.0)
     defaults.update(overrides)
     return Config(**defaults)
