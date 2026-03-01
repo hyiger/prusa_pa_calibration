@@ -21,25 +21,24 @@ entirely inside the browser; this script never sees your password or OTP codes.
 import argparse
 import base64
 import hashlib
-import http.server
 import json
-import os
 import pathlib
 import secrets
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
 
 # ── OAuth2 / API constants (from PrusaSlicer ServiceConfig.cpp) ────────────
-_CLIENT_ID     = "oamhmhZez7opFosnwzElIgE2oGgI2iJORSkw587O"
-_AUTH_URL      = "https://account.prusa3d.com/o/authorize/"
-_TOKEN_URL     = "https://account.prusa3d.com/o/token/"
-_PRINTERS_URL  = "https://connect.prusa3d.com/slicer/v1/printers"
-_CONNECT_BASE  = "https://connect.prusa3d.com"
-_REDIRECT_PORT = 9876
-_REDIRECT_URI  = f"http://localhost:{_REDIRECT_PORT}/"
+_CLIENT_ID    = "oamhmhZez7opFosnwzElIgE2oGgI2iJORSkw587O"
+_AUTH_URL     = "https://account.prusa3d.com/o/authorize/"
+_TOKEN_URL    = "https://account.prusa3d.com/o/token/"
+_PRINTERS_URL = "https://connect.prusa3d.com/slicer/v1/printers"
+# PrusaSlicer's whitelisted redirect URI — we use it and ask the user to
+# paste the resulting URL back, since http://localhost is not whitelisted.
+_REDIRECT_URI = "prusaslicer://login"
 
 # ── Token storage ──────────────────────────────────────────────────────────
 TOKEN_DIR  = pathlib.Path.home() / ".config" / "prusa_calibration"
@@ -115,7 +114,7 @@ def _do_refresh(refresh_tok: str) -> dict:
 
 
 def _browser_login() -> dict:
-    """Open browser, run PKCE flow, return raw token response dict."""
+    """Open browser for PKCE login; user pastes back the redirect URL."""
     verifier, challenge = _pkce_pair()
 
     params = urllib.parse.urlencode({
@@ -128,55 +127,36 @@ def _browser_login() -> dict:
     })
     auth_url = f"{_AUTH_URL}?{params}"
 
-    # Capture the auth code via a local one-shot HTTP server.
-    code_holder: list[str] = []
-
-    class _Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            if "code" in qs:
-                code_holder.append(qs["code"][0])
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(
-                    b"<html><body><h2>Login successful!</h2>"
-                    b"<p>You can close this tab and return to the terminal.</p>"
-                    b"</body></html>"
-                )
-            elif "error" in qs:
-                error = qs.get("error", ["unknown"])[0]
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(
-                    f"<html><body><h2>Login failed: {error}</h2></body></html>"
-                    .encode()
-                )
-            else:
-                self.send_response(200)
-                self.end_headers()
-
-        def log_message(self, *_):  # suppress request log
-            pass
-
-    srv = http.server.HTTPServer(("localhost", _REDIRECT_PORT), _Handler)
-    srv.timeout = 180  # 3 min to complete login (plenty for 2FA)
-
-    print(f"Opening browser for Prusa login…")
-    print(f"  (If the browser doesn't open automatically, visit:)\n  {auth_url}\n")
+    print("Opening browser for Prusa login…")
+    print("  (If it doesn't open automatically, visit the URL below.)\n")
     webbrowser.open(auth_url)
-    print("Waiting for login (3-minute timeout)…")
 
-    deadline = time.monotonic() + 180
-    while not code_holder and time.monotonic() < deadline:
-        srv.handle_request()
-    srv.server_close()
+    print("After logging in, the browser will try to open a 'prusaslicer://'")
+    print("URL and show an error — that's expected.")
+    print()
+    print("Copy the full URL from the browser address bar and paste it here.")
+    print("  It looks like:  prusaslicer://login?code=XXXXXXXXXX")
+    print()
 
-    if not code_holder:
-        print("ERROR: timed out waiting for login.", file=sys.stderr)
-        sys.exit(1)
+    while True:
+        try:
+            raw = input("Paste URL (or just the code): ").strip()
+        except EOFError:
+            print("\nAborted.", file=sys.stderr)
+            sys.exit(1)
 
-    print("Authorization code received — exchanging for tokens…")
-    return _exchange_code(code_holder[0], verifier)
+        if raw.startswith("prusaslicer://"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(raw).query)
+            code = qs.get("code", [""])[0]
+        else:
+            code = raw  # user pasted just the bare code value
+
+        if code:
+            break
+        print("Couldn't find a 'code' parameter — please try again.")
+
+    print("Exchanging code for tokens…")
+    return _exchange_code(code, verifier)
 
 
 # ── Printer selection ──────────────────────────────────────────────────────
