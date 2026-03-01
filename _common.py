@@ -409,10 +409,16 @@ def _write_bgcode(gcode_text: str, dest, thumbnails=()) -> int:
     # GCode MUST be last; libbgcode convert() seeks back past GCode to find
     # PrintMetadata and SlicerMetadata, so they must precede the GCode blocks.
     file_hdr   = MAGIC + struct.pack("<IH", VERSION, CKSUM_CRC32)
+    # Use COMP_NONE (compress=False) for the GCode block.
+    # Prusa firmware's PrusaPackGcodeReader::init_decompression() only handles
+    # ECompressionType::None, Heatshrink_11_4, and Heatshrink_12_4 — it returns
+    # false (→ "The file is corrupt") for ECompressionType::Deflate (comp=1).
+    # libbgcode's is_valid_binary_gcode() never decompresses GCode (uses skip_block),
+    # so DEFLATE passes format validation but fails at print time.
     gcode_blk  = _block(BLK_GCODE,
                         params=struct.pack("<H", ENC_RAW),
                         data=gcode_text.encode("utf-8"),
-                        compress=True)
+                        compress=False)
     thumb_data = b"".join(_thumb_block(tw, th, png) for tw, th, png in thumbnails)
     content = (
         file_hdr
