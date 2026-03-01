@@ -82,9 +82,9 @@ class Config(CommonConfig):
     base_thick:    float = 1.0    # mm — solid base slab thickness
 
     # Face text: 7-segment temperature number on the front face of the long wall
-    label_tab:     bool  = True   # embed temperature label in the long-wall face
-    grid_walls:    bool  = False  # use crosshatch grid infill for overhang walls
-    wall_density:  int   = 50    # infill density % when --grid-walls is active
+    label_tab:      bool  = True   # embed temperature label in the long-wall face
+    grid_infill:    bool  = False  # use crosshatch grid infill for overhang walls
+    infill_density: int   = 50    # infill density % when --grid-infill is active
 
 
 # ── Temperature tower generator ────────────────────────────────────────────────
@@ -102,7 +102,7 @@ class TowerGenerator(BaseGenerator):
         """Filled rectangle: 2 perimeters + crosshatch grid infill (~50%)."""
         self._anchor_frame(x0, y0, sx, sy, lh, lw, 2, speed)
         base_spacing = lw - lh * (1.0 - math.pi / 4.0)
-        pitch = base_spacing * (100.0 / self.cfg.wall_density)
+        pitch = base_spacing * (100.0 / self.cfg.infill_density)
         ix0 = x0 + 2 * base_spacing
         iy0 = y0 + 2 * base_spacing
         ix1 = x0 + sx - 2 * base_spacing
@@ -331,7 +331,9 @@ class TowerGenerator(BaseGenerator):
                 sx0 = _r(short_x1 - (5.0 + local_z / tan_short), _XY)
                 lx1 = _r(long_x0  + 20.0 + local_z / tan_long,   _XY)
 
-                wall_fill = self._grid_layer if c.grid_walls else self._anchor_layer
+                is_bridge_layer = local_z >= c.module_height - c.bridge_thick - 1e-6
+                wall_fill = (self._anchor_layer if (not c.grid_infill or is_bridge_layer)
+                             else self._grid_layer)
 
                 # Short overhang wall — growing leftward
                 short_w = short_x1 - sx0
@@ -441,10 +443,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Thickness of solid base slab")
     g.add_argument("--no-label-tab", dest="label_tab", action="store_false",
                    help="Disable temperature labels on long-wall face (default: enabled)")
-    g.add_argument("--grid-walls", dest="grid_walls", action="store_true",
+    g.add_argument("--grid-infill", dest="grid_infill", action="store_true",
                    help="Use crosshatch grid infill for overhang walls instead of solid")
-    g.add_argument("--wall-density", type=int, default=50, metavar="%",
-                   help="Infill density %% for --grid-walls (default: 50)")
+    g.add_argument("--infill-density", type=int, default=50, metavar="%",
+                   help="Infill density %% for --grid-infill (default: 50)")
 
     return p
 
@@ -498,8 +500,8 @@ def main():
         unretract_speed    = args.unretract_speed,
         zhop               = args.zhop,
         label_tab          = args.label_tab,
-        grid_walls         = args.grid_walls,
-        wall_density       = args.wall_density,
+        grid_infill        = args.grid_infill,
+        infill_density     = args.infill_density,
         anchor             = args.anchor,
         anchor_perimeters  = args.anchor_perimeters,
         show_lcd           = args.show_lcd,
