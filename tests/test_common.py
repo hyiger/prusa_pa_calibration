@@ -28,6 +28,7 @@ from _common import (
     _thumbnail_tower,
     _thumbnails_to_gcode_comments,
     _write_bgcode,
+    bgcode_to_ascii,
     handle_output,
 )
 
@@ -1151,6 +1152,172 @@ class TestHandleOutputBinaryDefault(unittest.TestCase):
             self.assertNotIn("thumbnail", content)
         finally:
             os.unlink(path)
+
+
+# ── bgcode_to_ascii ────────────────────────────────────────────────────────────
+
+def _make_raw_bgcode(gcode_bytes: bytes, comp: int = 0, enc: int = 0) -> bytes:
+    """Build a minimal but valid bgcode file with a single GCode block.
+
+    comp=0 COMP_NONE, comp=1 COMP_DEFLATE.  Handles CRC correctly so the
+    parser won't reject it — useful for testing unsupported comp/enc paths.
+    """
+    import struct, zlib as _zlib
+
+    MAGIC     = b"GCDE"
+    BLK_GCODE = 1
+
+    if comp == 0:   # COMP_NONE
+        payload = gcode_bytes
+        blk_hdr = struct.pack("<HHI", BLK_GCODE, comp, len(gcode_bytes))
+    elif comp == 1: # COMP_DEFLATE
+        obj = _zlib.compressobj(level=6, wbits=15)
+        payload = obj.compress(gcode_bytes) + obj.flush()
+        blk_hdr = struct.pack("<HHII", BLK_GCODE, comp, len(gcode_bytes), len(payload))
+    else:           # Heatshrink variants — valid header, fake payload
+        payload = gcode_bytes
+        blk_hdr = struct.pack("<HHII", BLK_GCODE, comp, len(gcode_bytes), len(gcode_bytes))
+
+    params = struct.pack("<H", enc)
+    crc    = _zlib.crc32(blk_hdr + params + payload) & 0xFFFFFFFF
+    block  = blk_hdr + params + payload + struct.pack("<I", crc)
+    return MAGIC + struct.pack("<IH", 1, 1) + block
+
+
+class TestBgcodeToAscii(unittest.TestCase):
+    """Tests for bgcode_to_ascii()."""
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    def _roundtrip(self, gcode: str) -> bytes:
+        """Produce bgcode bytes via _write_bgcode (the authoritative writer)."""
+        buf = io.BytesIO()
+        _write_bgcode(gcode, buf)
+        return buf.getvalue()
+
+    # ── Round-trip (uses _write_bgcode as the source of truth) ─────────────
+
+    def test_roundtrip_simple(self):
+        gcode = "G28\nG1 X10 Y10 F3000\n"
+        self.assertEqual(bgcode_to_ascii(self._roundtrip(gcode)), gcode)
+
+    def test_roundtrip_empty_gcode(self):
+        self.assertEqual(bgcode_to_ascii(self._roundtrip("")), "")
+
+    def test_roundtrip_multiline(self):
+        gcode = "G28\n" * 200
+        self.assertEqual(bgcode_to_ascii(self._roundtrip(gcode)), gcode)
+
+    def test_roundtrip_unicode_comments(self):
+        gcode = "; héllo wörld\nG28\n"
+        self.assertEqual(bgcode_to_ascii(self._roundtrip(gcode)), gcode)
+
+    def test_roundtrip_with_thumbnails(self):
+        """Thumbnail blocks should be skipped; only GCode returned."""
+        gcode = "G28\n"
+        png   = _make_png(2, 2, [(255, 0, 0)] * 4)
+        buf   = io.BytesIO()
+        _write_bgcode(gcode, buf, thumbnails=[(2, 2, png)])
+        self.assertEqual(bgcode_to_ascii(buf.getvalue()), gcode)
+
+    # ── DEFLATE-compressed GCode block ─────────────────────────────────────
+
+    def test_deflate_gcode_block(self):
+        """bgcode_to_ascii must decompress DEFLATE-compressed GCode blocks."""
+        gcode = "G28\nG1 X10\n"
+        data  = _make_raw_bgcode(gcode.encode(), comp=1, enc=0)
+        self.assertEqual(bgcode_to_ascii(data), gcode)
+
+    # ── Multiple GCode blocks concatenated ─────────────────────────────────
+
+    def test_multiple_gcode_blocks_concatenated(self):
+        """If a file has more than one GCode block they are joined in order."""
+        import struct, zlib as _zlib
+
+        MAGIC     = b"GCDE"
+        BLK_GCODE = 1
+
+        def _block(text: bytes) -> bytes:
+            hdr    = struct.pack("<HHI", BLK_GCODE, 0, len(text))
+            params = struct.pack("<H", 0)
+            crc    = _zlib.crc32(hdr + params + text) & 0xFFFFFFFF
+            return hdr + params + text + struct.pack("<I", crc)
+
+        part1 = b"G28\n"
+        part2 = b"G1 X10\n"
+        data  = MAGIC + struct.pack("<IH", 1, 1) + _block(part1) + _block(part2)
+        self.assertEqual(bgcode_to_ascii(data), (part1 + part2).decode())
+
+    # ── Bad magic / header ──────────────────────────────────────────────────
+
+    def test_bad_magic_raises(self):
+        with self.assertRaisesRegex(ValueError, "magic"):
+            bgcode_to_ascii(b"XXXX" + b"\x00" * 20)
+
+    def test_too_short_raises(self):
+        with self.assertRaises(ValueError):
+            bgcode_to_ascii(b"GCDE\x01")
+
+    # ── CRC validation ──────────────────────────────────────────────────────
+
+    def test_crc_mismatch_raises(self):
+        data = bytearray(self._roundtrip("G28\n"))
+        data[-5] ^= 0xFF   # corrupt a byte inside the last block's payload/CRC area
+        with self.assertRaisesRegex(ValueError, "[Cc][Rr][Cc]"):
+            bgcode_to_ascii(bytes(data))
+
+    # ── Unsupported compression / encoding ─────────────────────────────────
+
+    def test_heatshrink_11_4_raises(self):
+        data = _make_raw_bgcode(b"G28\n", comp=2, enc=0)  # HEATSHRINK_11_4
+        with self.assertRaisesRegex(ValueError, "[Hh]eatshrink"):
+            bgcode_to_ascii(data)
+
+    def test_heatshrink_12_4_raises(self):
+        data = _make_raw_bgcode(b"G28\n", comp=3, enc=0)  # HEATSHRINK_12_4
+        with self.assertRaisesRegex(ValueError, "[Hh]eatshrink"):
+            bgcode_to_ascii(data)
+
+    def test_meatpack_raises(self):
+        data = _make_raw_bgcode(b"G28\n", comp=0, enc=1)  # ENC_MEATPACK
+        with self.assertRaisesRegex(ValueError, "[Mm]eat[Pp]ack"):
+            bgcode_to_ascii(data)
+
+    def test_meatpack_comments_raises(self):
+        data = _make_raw_bgcode(b"G28\n", comp=0, enc=2)  # ENC_MEATPACK_COMMENTS
+        with self.assertRaisesRegex(ValueError, "[Mm]eat[Pp]ack"):
+            bgcode_to_ascii(data)
+
+    # ── No GCode blocks ─────────────────────────────────────────────────────
+
+    def test_no_gcode_blocks_raises(self):
+        """A bgcode file with only metadata and no GCode block is invalid."""
+        import struct, zlib as _zlib
+
+        MAGIC         = b"GCDE"
+        BLK_FILE_META = 0
+
+        payload = b"Producer=test\n"
+        hdr     = struct.pack("<HHI", BLK_FILE_META, 0, len(payload))
+        params  = struct.pack("<H", 0)
+        crc     = _zlib.crc32(hdr + params + payload) & 0xFFFFFFFF
+        block   = hdr + params + payload + struct.pack("<I", crc)
+        data    = MAGIC + struct.pack("<IH", 1, 1) + block
+
+        with self.assertRaisesRegex(ValueError, "[Nn]o [Gg][Cc]ode"):
+            bgcode_to_ascii(data)
+
+    # ── Truncated data ──────────────────────────────────────────────────────
+
+    def test_truncated_payload_raises(self):
+        data = self._roundtrip("G28\n")[:-10]   # chop off end
+        with self.assertRaises(ValueError):
+            bgcode_to_ascii(data)
+
+    def test_truncated_header_raises(self):
+        data = self._roundtrip("G28\n")[:12]   # only file header + partial block hdr
+        with self.assertRaises(ValueError):
+            bgcode_to_ascii(data)
 
 
 if __name__ == "__main__":
