@@ -6,6 +6,7 @@ base generator class, and CLI helpers shared by pa_calibration.py and temperatur
 """
 
 import argparse
+import base64
 import io
 import math
 import os
@@ -253,30 +254,57 @@ def _thumbnail_pa(w: int, h: int) -> bytes:
     return r.to_png()
 
 
-def _thumbnail_tower(w: int, h: int) -> bytes:
-    """Thumbnail for temperature tower: inverted step pyramid (wider at top).
+# Pre-rendered temperature-tower thumbnails (Prusa-orange silhouette traced from
+# an actual PrusaSlicer preview, recoloured to match our dark-bg + orange scheme).
+# Generated once with Pillow; embedded here so runtime stays pure stdlib.
+_TOWER_PNG_220x124 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAANwAAAB8CAIAAACNJEk4AAADVUlEQVR42u3dQVKsMBiF0UixA+c9"
+    "cjVvwa7mbcE9OOiZpUBDEm7gfCMnlqWeCpAf6LfH41GkpGZ/AjXt/7/35xcfn18bv+XNSqnq/v5q"
+    "o0soVR/fQZdQqgm+Iy6hVFuCO1xCCd85LbiEEr44l1DyF+cSSvjiXELJX5xLEx344g7fUPIXd/UN"
+    "JX9BHKGEL44jlPyF5uobvrjF8tYo+ct0eReU/A3k8moo4buAy4FR8ndVlwOghO9uLrNQ8sdlOWuf"
+    "Ej4tHL5n/pR29T3Dp7TN85k/RQ2+11Hyp/5NtXRLtRa4yR9LaS6niqcCUhWXU91TVOm4y6n6pZN0"
+    "0OXU4pJeOuJyarTVJO12ueeGDJuXKoH3U3KpxGd0uFSjc7+JSEWJLGbfKiM+982lOq+Xxowq482+"
+    "uVTi7Fsy+5bZN5cy+5YqjxltEinxrWtcqt0+pdm3smaMxXPfKsaMslgWm+cqo71Pz+xbY76MgEvF"
+    "3ZDBpUJvyOBSWTdkcKluLn0MnsoVxox2LpU4ZuRS7U78zL6VNfh+GSWI6uDS7FsDzr5tA6mkzb65"
+    "VOiL+LlU3OxbMvuW2TeXMmYUi8aMutDmOZfqOWN09a0y5CO2FkV1XiytlCo5A8bXziktlor7yBI7"
+    "lOqWw7eGvSHDYqnQGzK4VOLhm0ud/+FOXGqM+ym51EYnP6hscWn2rR6H6R9alhe1GUR1OGv8+Pza"
+    "jmdmUf1n3E9Rf32LMaNO4Lj8jS+cU3KpKte7qy6NGVXnsnof5V9XOu8S0jlbgQvr5ctbQlzi2Nql"
+    "MaMaHqn3AfU0o3ovQAt4nj/RREcNOa4i+fUHeRG/6nDc56/4FFvVcrNs4DlU3O3bI7YIHvVXTnnu"
+    "m8ubEOzvz5iRvzh/PnGMvzH2no0Z+StDvkuIS/6iUXLJXyJKLvkLutBhkb8zUW7ZsoePv4aH7yO7"
+    "VvfRyV/vc8qXnsy9vM7VX3/LL8tfhQudLU+aXU+n9W8YlLX+0GlAjy+B/PXeEmrh8hSa1r9L7VM2"
+    "ctkOKH+3+MiS1i5366ziD8FRJzp9XC4Ysv5Buf7/PvcfzF8x0TlxZsOflfKx3Ufr1yQgqE13CdVy"
+    "6fpDDZ9mdAmiiPspF1xaAhXx4NiRfRyp1SO2/CnrcQipXd9IvP3n1++aOwAAAABJRU5ErkJggg==")
 
-    Each segment's overhang walls extend further than the one below, so the
-    overall silhouette grows wider going up — narrow at the base, wide at the top.
+_TOWER_PNG_16x16 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAASUlEQVR42mOUk5NjIA7c8RJW2faW"
+    "haAiNBEWYhRh0YBfETJgIkk1VANJYFQDfqCy7S0JGiCqsScNTEXIgBGeWiHxjVURdg1EAgDLXBFt"
+    "toQHLwAAAABJRU5ErkJggg==")
+
+_TOWER_PNGS = {(220, 124): _TOWER_PNG_220x124, (16, 16): _TOWER_PNG_16x16}
+
+
+def _thumbnail_tower(w: int, h: int) -> bytes:
+    """Return a pre-rendered thumbnail for the temperature tower.
+
+    Uses orange-on-dark silhouettes traced from an actual PrusaSlicer preview.
+    Falls back to a simple drawn approximation for non-standard sizes.
     """
+    if (w, h) in _TOWER_PNGS:
+        return _TOWER_PNGS[(w, h)]
+    # Fallback for non-standard sizes: horizontal bridge-slab pattern
     r = _Raster(w, h)
     n = max(2, min(7, h // 16))
-
     top_m  = max(1, h // 10)
-    seg_h  = max(1, (h - top_m) // n)
-    min_w  = max(4, w * 2 // 5)   # bottom segment (~40 % of width)
-    max_w  = max(6, w * 9 // 10)  # top    segment (~90 % of width)
-
+    seg_h  = max(3, (h - top_m) // n)
+    slab_h = max(1, seg_h // 3)
+    slab_w = max(6, w * 4 // 5)
+    wall_w = max(1, slab_w // 5)
+    slab_x = (w - slab_w) // 2
     for i in range(n):
-        # i=0 → top of image = top of tower (widest overhang)
-        # i=n-1 → bottom of image = base of tower (narrowest)
-        frac  = (n - 1 - i) / max(1, n - 1)
-        seg_w = int(min_w + frac * (max_w - min_w))
-        x0    = (w - seg_w) // 2
-        y0    = top_m + i * seg_h
-        y1    = top_m + (i + 1) * seg_h
-        r.fill_rect(x0, y0, x0 + seg_w, y1)
-
+        y0 = top_m + i * seg_h
+        r.fill_rect(slab_x,                  y0,          slab_x + slab_w, y0 + slab_h)
+        r.fill_rect(slab_x,                  y0 + slab_h, slab_x + wall_w, y0 + seg_h)
+        r.fill_rect(slab_x + slab_w - wall_w, y0 + slab_h, slab_x + slab_w, y0 + seg_h)
     return r.to_png()
 
 
