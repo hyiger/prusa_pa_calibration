@@ -233,6 +233,153 @@ def _write_bgcode(gcode_text: str, dest) -> int:
     return len(content)
 
 
+def _upload_prusaconnect(
+    data: bytes,
+    filename: str,
+    start_print: bool = False,
+) -> None:
+    """Upload G-code to PrusaConnect using saved OAuth2 tokens.
+
+    Reads (and auto-refreshes) the token file written by prusa_login.py.
+    Upload is a two-step process matching PrusaSlicer's PrusaConnectNew class:
+      1. POST /app/users/teams/{team_id}/uploads  — register the upload
+      2. PUT  /app/teams/{team_id}/files/raw?upload_id={id}  — send the file
+
+    Both calls use Authorization: Bearer {access_token}.
+    """
+    import json as _json
+    import pathlib
+    import urllib.error
+    import urllib.request
+    import time as _time
+
+    TOKEN_FILE = pathlib.Path.home() / ".config" / "prusa_calibration" / "tokens.json"
+
+    # ── Load tokens ────────────────────────────────────────────────────────
+    if not TOKEN_FILE.exists():
+        print(
+            "ERROR: not logged in to PrusaConnect.\n"
+            "       Run: python3 prusa_login.py",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        tokens = _json.loads(TOKEN_FILE.read_text())
+    except Exception as e:
+        print(f"ERROR: cannot read {TOKEN_FILE}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    def _save(t: dict) -> None:
+        TOKEN_FILE.write_text(_json.dumps(t, indent=2))
+        TOKEN_FILE.chmod(0o600)
+
+    # ── Auto-refresh if expired ────────────────────────────────────────────
+    if _time.time() >= tokens.get("expires_at", 0):
+        refresh_tok = tokens.get("refresh_token", "")
+        if not refresh_tok:
+            print(
+                "ERROR: PrusaConnect token expired and no refresh token stored.\n"
+                "       Run: python3 prusa_login.py",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print("PrusaConnect token expired — refreshing…", file=sys.stderr)
+        CLIENT_ID = "oamhmhZez7opFosnwzElIgE2oGgI2iJORSkw587O"
+        TOKEN_URL = "https://account.prusa3d.com/o/token/"
+        body = urllib.parse.urlencode({
+            "grant_type":    "refresh_token",
+            "client_id":     CLIENT_ID,
+            "refresh_token": refresh_tok,
+        }).encode()
+        req = urllib.request.Request(TOKEN_URL, data=body, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = _json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            print(
+                f"ERROR: token refresh failed (HTTP {e.code}).\n"
+                "       Run: python3 prusa_login.py",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        tokens["access_token"] = raw["access_token"]
+        if "refresh_token" in raw:
+            tokens["refresh_token"] = raw["refresh_token"]
+        tokens["expires_at"] = _time.time() + int(raw.get("expires_in", 3600)) - 60
+        _save(tokens)
+
+    access_token  = tokens["access_token"]
+    team_id       = tokens.get("team_id", "")
+    printer_uuid  = tokens.get("printer_uuid", "")
+    printer_name  = tokens.get("printer_name", printer_uuid)
+
+    if not team_id or not printer_uuid:
+        print(
+            "ERROR: token file is missing team_id or printer_uuid.\n"
+            "       Run: python3 prusa_login.py",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    base = "https://connect.prusa3d.com"
+
+    def _bearer_req(url: str, method: str, body=None, content_type: str = "") -> urllib.request.Request:
+        req = urllib.request.Request(url, data=body, method=method)
+        req.add_header("Authorization", f"Bearer {access_token}")
+        if content_type:
+            req.add_header("Content-Type", content_type)
+        return req
+
+    # ── Step 1: register the upload ────────────────────────────────────────
+    init_url  = f"{base}/app/users/teams/{team_id}/uploads"
+    init_body = _json.dumps({
+        "printer_uuid": printer_uuid,
+        "filename":     filename,
+        "size":         len(data),
+        "position":     -1,         # append to print queue
+    }).encode()
+
+    print(
+        f"Uploading {filename} ({len(data):,} bytes) to PrusaConnect "
+        f"(printer: {printer_name})…",
+        file=sys.stderr,
+    )
+    try:
+        req = _bearer_req(init_url, "POST", init_body, "application/json")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            init_resp = _json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body_txt = e.read().decode(errors="replace")
+        print(f"ERROR: upload registration failed: HTTP {e.code} — {body_txt}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    upload_id = init_resp.get("id")
+    if not upload_id:
+        print(f"ERROR: server did not return an upload id. Response: {init_resp}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # ── Step 2: PUT the file ───────────────────────────────────────────────
+    put_url = f"{base}/app/teams/{team_id}/files/raw?upload_id={upload_id}"
+    if start_print:
+        put_url += "&to_print=true"
+
+    try:
+        req = _bearer_req(put_url, "PUT", data, "text/x.gcode")
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        body_txt = e.read().decode(errors="replace")
+        print(f"ERROR: file upload failed: HTTP {e.code} — {body_txt}", file=sys.stderr)
+        sys.exit(1)
+
+    action = " (print queued)" if start_print else ""
+    print(f"Upload complete — HTTP {status}{action}", file=sys.stderr)
+
+
 def _upload_prusalink(
     data: bytes,
     url: str,
@@ -721,13 +868,13 @@ def add_common_args(p: argparse.ArgumentParser, default_stem: str = "output") ->
                    help="Start printing immediately after upload")
 
     g = p.add_argument_group("PrusaConnect upload (cloud)")
-    g.add_argument("--prusaconnect-key", metavar="KEY",
-                   help="PrusaConnect API key (connect.prusa3d.com → Printer detail → API Key). "
-                        "Uploads the generated G-code to PrusaConnect after generation.")
+    g.add_argument("--prusaconnect", action="store_true",
+                   help="Upload to PrusaConnect using saved login tokens. "
+                        "Run 'python3 prusa_login.py' once to authenticate "
+                        "and select a printer.")
     g.add_argument("--prusaconnect-filename", metavar="NAME",
                    help=f"Filename to store in PrusaConnect "
-                        f"(default: basename of -o, or {default_stem}.gcode / "
-                        f"{default_stem}.bgcode)")
+                        f"(default: basename of -o, or {default_stem}.bgcode)")
     g.add_argument("--prusaconnect-print", action="store_true",
                    help="Start printing immediately after upload")
 
@@ -841,11 +988,9 @@ def handle_output(gcode: str, args, default_stem: str) -> None:
             start_print=getattr(args, "prusalink_print", False),
         )
 
-    if getattr(args, "prusaconnect_key", None):
-        _upload_prusalink(
+    if getattr(args, "prusaconnect", False):
+        _upload_prusaconnect(
             _upload_data(),
-            url="https://connect.prusa3d.com",
-            key=args.prusaconnect_key,
             filename=_remote_name("prusaconnect"),
             start_print=getattr(args, "prusaconnect_print", False),
         )
