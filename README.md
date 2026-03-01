@@ -27,19 +27,19 @@ Prints a row of V-shaped corner patterns, each at a different K value. The patte
 
 ```bash
 # Coarse scan: K = 0, 1, 2, 3, 4 (Core One, PLA defaults)
-python3 pa_calibration.py -o coarse.gcode
+python3 pa_calibration.py -o coarse.bgcode
 
 # Fine scan around your winner (e.g. K=2 looked best)
-python3 pa_calibration.py --la-start 1.5 --la-end 2.5 --la-step 0.1 --side-length 11 -o fine.gcode
+python3 pa_calibration.py --la-start 1.5 --la-end 2.5 --la-step 0.1 --side-length 11 -o fine.bgcode
 
 # PETG on a Core One
-python3 pa_calibration.py --filament PETG -o petg.gcode
+python3 pa_calibration.py --filament PETG -o petg.bgcode
 
 # PETG on an MK4S
-python3 pa_calibration.py --printer MK4S --filament PETG -o mk4s_petg.gcode
+python3 pa_calibration.py --printer MK4S --filament PETG -o mk4s_petg.bgcode
 
-# Binary G-code (.bgcode) for SD card
-python3 pa_calibration.py -o la_cal.bgcode --binary
+# Plain ASCII G-code (e.g. for older firmware or inspection)
+python3 pa_calibration.py --ascii -o la_cal.gcode
 ```
 
 ### How to Read the Results
@@ -88,19 +88,22 @@ Prints a rectangular tower split into horizontal segments, each at a different h
 
 ```bash
 # PLA: 215 → 185 °C in 5 °C steps (default)
-python3 temperature_tower.py -o temp_tower.gcode
+python3 temperature_tower.py -o temp_tower.bgcode
 
 # PETG on Core One
-python3 temperature_tower.py --filament PETG -o petg_tower.gcode
+python3 temperature_tower.py --filament PETG -o petg_tower.bgcode
 
 # PETG with explicit range
-python3 temperature_tower.py --filament PETG --temp-start 240 --temp-end 210 -o petg_tower.gcode
+python3 temperature_tower.py --filament PETG --temp-start 240 --temp-end 210 -o petg_tower.bgcode
 
 # ABS on MK4S
-python3 temperature_tower.py --printer MK4S --filament ABS -o abs_tower.gcode
+python3 temperature_tower.py --printer MK4S --filament ABS -o abs_tower.bgcode
 
 # Fine scan around 230 °C
-python3 temperature_tower.py --temp-start 235 --temp-end 225 --temp-step 2 -o fine_tower.gcode
+python3 temperature_tower.py --temp-start 235 --temp-end 225 --temp-step 2 -o fine_tower.bgcode
+
+# Plain ASCII G-code
+python3 temperature_tower.py --ascii -o temp_tower.gcode
 ```
 
 ### How to Read the Results
@@ -220,7 +223,7 @@ Sets hotend/bed temperatures, fan speeds, and retraction distance.
 | `--no-lcd` | Suppress M117 display messages |
 | `--fan-speed %` | Part-cooling fan from layer 2 (default: preset or 100%) |
 | `--first-layer-fan %` | Part-cooling fan on first layer (default: preset or 0%) |
-| `--binary` | Write Prusa binary G-code v1 (.bgcode) |
+| `--ascii` | Write plain ASCII G-code instead of binary (default output is `.bgcode`) |
 | `-o FILE` | Output file (default: stdout) |
 
 ### PrusaLink Upload (local network)
@@ -248,26 +251,30 @@ python3 temperature_tower.py --filament PETG --prusalink-url http://192.168.1.10
 
 Upload directly to [connect.prusa3d.com](https://connect.prusa3d.com) so you can trigger a print from anywhere without needing to be on the same network as the printer.
 
-| Option | Description |
-|---|---|
-| `--prusaconnect-key KEY` | API key from connect.prusa3d.com (Printer detail → API Key) |
-| `--prusaconnect-filename NAME` | Remote filename (default: basename of `-o`, or script default) |
-| `--prusaconnect-print` | Start printing immediately after upload |
+Authentication uses OAuth2 — run `prusa_login.py` once to store a token, then pass `--prusaconnect` on every upload:
 
 ```bash
-python3 pa_calibration.py --prusaconnect-key abc123 --prusaconnect-print
-python3 temperature_tower.py --filament PETG --prusaconnect-key abc123 --prusaconnect-print
+# Authenticate once (opens browser for Prusa Account login)
+python3 prusa_login.py
+
+# Generate and upload
+python3 pa_calibration.py --prusaconnect --prusaconnect-print
+python3 temperature_tower.py --filament PETG --prusaconnect
 ```
 
-> **Finding your API key:** Log in to [connect.prusa3d.com](https://connect.prusa3d.com), open the **Printer detail** page for your printer, and copy the **API Key** shown there.
+| Option | Description |
+|---|---|
+| `--prusaconnect` | Upload to PrusaConnect using the stored OAuth token |
+| `--prusaconnect-filename NAME` | Remote filename (default: basename of `-o`, or script default) |
+| `--prusaconnect-print` | Start printing immediately after upload |
 
 ### Custom Start / End G-code
 
 The built-in start/end G-code is derived from PrusaSlicer's Core One profile. Override with:
 
 ```bash
-python3 pa_calibration.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.gcode
-python3 temperature_tower.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.gcode
+python3 pa_calibration.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.bgcode
+python3 temperature_tower.py --printer MK4S --start-gcode mk4s_start.gcode --end-gcode mk4s_end.gcode -o out.bgcode
 ```
 
 Template variables available in custom files:

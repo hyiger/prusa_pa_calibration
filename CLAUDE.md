@@ -113,11 +113,23 @@ Implemented in `_write_bgcode()` in `_common.py` using only `struct` and `zlib`.
 
 ## Testing
 
-No automated test suite. Validate changes by:
-1. Running both scripts and checking they produce valid output:
+Run the full test suite (pytest required):
+```bash
+python3 -m pytest tests/ -v
+```
+
+Tests live in `tests/`:
+| File | Covers |
+|---|---|
+| `tests/test_common.py` | `_common.py` — presets, `BaseGenerator`, thumbnails, bgcode writer, upload helpers |
+| `tests/test_pa_calibration.py` | `pa_calibration.py` — Config, Generator, generate() |
+| `tests/test_temperature_tower.py` | `temperature_tower.py` — Config, TowerGenerator, generate() |
+
+After making changes, also do a quick smoke-test:
+1. Running both scripts to verify output:
    ```bash
-   python3 pa_calibration.py -o /tmp/pa_test.gcode
-   python3 temperature_tower.py -o /tmp/tt_test.gcode
+   python3 pa_calibration.py -o /tmp/pa_test.bgcode
+   python3 temperature_tower.py -o /tmp/tt_test.bgcode
    ```
 2. Inspecting the G-code in PrusaSlicer or OrcaSlicer preview to verify geometry.
 3. Checking preset resolution works correctly:
