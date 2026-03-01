@@ -6,15 +6,13 @@ Generates a multi-segment temperature tower inspired by the "Advanced temp tower
 design by Tronnic.  Each temperature segment features:
 
   - Short overhang wall  (overhang quality test, default 45°)
-  - Long overhang wall   (overhang quality test, default 35°), with the
-    temperature number rendered on its front face via layer cross-sections
+  - Long overhang wall   (overhang quality test, default 35°)
   - Stringing-test cones in the open bridge gap
   - Bridging slab spanning the gap at the top of each segment
 
-The temperature label is inset into the long-side wall's front face using
-7-segment digit geometry: at each layer the front-face perimeter is printed
-with gaps (unprinted segments) at digit bar positions, creating recessed
-grooves ~2 line-widths deep that spell out the temperature number.
+The temperature label is printed as flat 7-segment digit paths on the bridge
+slab surface.  Digits are visible in slicer top-down preview and build up
+~bridge_thick mm of raised text on the physical print.
 
 Usage:
     # PLA: scan 215 → 185 °C in 5 °C steps (default)
