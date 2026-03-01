@@ -121,11 +121,18 @@ The bottom segment is `--temp-start`, the top segment is `--temp-end`. Work from
 |---|---|---|
 | `--temp-start °C` | preset or 215 | Bottom segment temperature |
 | `--temp-end °C` | temp-start − 30 | Top segment temperature |
-| `--temp-step °C` | 5.0 | Temperature change per segment |
-| `--segment-height mm` | 5.0 | Height of each temperature band |
-| `--tower-width mm` | 20.0 | Tower footprint width (X) |
-| `--tower-depth mm` | 20.0 | Tower footprint depth (Y) |
-| `--wall-count N` | 2 | Perimeter walls per layer |
+| `--temp-step °C` | 5.0 | Temperature change per segment (always positive) |
+| `--module-height mm` | 10.0 | Height of each temperature segment |
+| `--module-depth mm` | 10.0 | Depth (Y footprint) of each segment |
+| `--bridge-length mm` | 30.0 | Length of bridge / stringing-test area between walls |
+| `--bridge-thick mm` | 1.0 | Thickness of bridge slab at top of each segment |
+| `--short-angle deg` | 45.0 | Overhang angle of short-side wall |
+| `--long-angle deg` | 35.0 | Overhang angle of long-side wall |
+| `--n-cones N` | 2 | Number of stringing-test cones in bridge gap |
+| `--base-thick mm` | 1.0 | Thickness of solid base slab |
+| `--no-label-tab` | — | Disable temperature labels on bridge face (default: enabled) |
+| `--grid-infill` | — | Use crosshatch diamond infill for overhang walls instead of solid |
+| `--infill-density %` | 50 | Infill density for `--grid-infill` |
 
 ---
 
