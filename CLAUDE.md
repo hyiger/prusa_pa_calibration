@@ -21,7 +21,8 @@ _common.py
 ├─ BaseGenerator              — shared G-code generation methods
 │    ├─ buffer: _emit / _comment / _blank
 │    ├─ motion: _retract / _unretract / _travel / _line / _e_amount
-│    ├─ drawing: _perimeter / _anchor_frame / _anchor_layer
+│    ├─ drawing: _perimeter / _anchor_frame / _anchor_layer / _circle
+│    ├─ labels: _draw_digit / _draw_number / _digit_width / _num_tab_height
 │    └─ helpers: _m555 / _base_tmpl_vars
 ├─ add_common_args(p, stem)   — shared argparse groups (called first in _build_parser)
 ├─ resolve_presets(args, dir) — printer/filament lookup, template loading
@@ -29,12 +30,13 @@ _common.py
 
 pa_cal.py
 ├─ Config(CommonConfig)       — adds la_start/end/step, layer_count, pattern geometry, labels
-├─ Generator(BaseGenerator)   — adds _set_la, _pattern, 7-segment labels, generate()
+├─ Generator(BaseGenerator)   — adds _set_la, _pattern, generate()
 └─ main()                     — resolve_presets → Config → Generator → handle_output
 
 temp_tower.py
-├─ Config(CommonConfig)       — adds temp_start/end/step, segment_height, tower_width/depth, wall_count
-├─ TowerGenerator(BaseGenerator) — adds generate() with per-segment M104/M109 commands
+├─ Config(CommonConfig)       — adds temp_start/end/step, module_height/depth, bridge_length/thick,
+│                                short/long_angle, n_cones, base_thick, label_tab, grid_infill, infill_density
+├─ TowerGenerator(BaseGenerator) — adds _grid_layer, generate() with per-segment M104/M109 commands
 └─ main()                     — resolve_presets → Config → TowerGenerator → handle_output
 ```
 
@@ -76,9 +78,11 @@ Pattern bounding box:
 
 ## Temperature tower geometry
 
-The tower is a rectangular box (`tower_width × tower_depth`) printed in vertical segments. Each segment spans `layers_per_seg = max(1, round(segment_height / layer_height))` layers. At the start of each segment's first layer, `M104 S{temp}` (no-wait) is emitted. `M109 S{temp}` (wait) is used for segment 0 only.
+Each segment consists of a short overhang wall, a long overhang wall, a `bridge_length` gap (with stringing-test cones), and a solid bridging slab at the top. The segment footprint is `module_depth` deep. Each segment spans `layers_per_seg = max(1, round(module_height / layer_height))` layers. At the start of each segment's first layer, `M104 S{temp}` (no-wait) is emitted. `M109 S{temp}` (wait) is used for segment 0 only.
 
-Total layers = `n_segs * layers_per_seg`.
+Total layers = `n_base_layers + n_segs * layers_per_seg`.
+
+Temperature labels are printed as flat 7-segment digit paths on the bridge slab surface (topmost `bridge_thick` mm of each segment), building ~`bridge_thick` mm of raised text visible in slicer preview.
 
 ## Start / end G-code templates
 

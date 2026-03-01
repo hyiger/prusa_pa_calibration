@@ -77,10 +77,8 @@ class Config(CommonConfig):
 # ── PA-specific generator ──────────────────────────────────────────────────────
 
 class Generator(BaseGenerator):
-    """Translates a Config into a G-code string ready for a Prusa Core One."""
+    """Translates a Config into a G-code string for a Prusa printer."""
 
-    # 7-segment digit definitions.
-    # Segment order: top, top-right, bottom-right, bottom, bottom-left, top-left, middle
     def __init__(self, cfg: Config,
                  start_template: Optional[str] = None,
                  end_template:   Optional[str] = None):
