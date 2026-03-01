@@ -111,9 +111,9 @@ class TowerGenerator(BaseGenerator):
         Vertical bar notches are active between adjacent horizontal bars.
         """
         SL    = seg_len
-        h_tol = lh * 1.0          # horizontal bar: active over ±1 layer
-        v_tol = lh * 1.0          # exclusion zone near horizontal bar levels
-        nub   = lw * 3.0          # notch width for vertical bars
+        h_tol = lh * 3.0          # horizontal bar: active over ±3 layers (~0.6 mm)
+        v_tol = lh * 3.0          # exclusion zone near horizontal bar levels
+        nub   = lw * 4.0          # notch width for vertical bars (must be < SL/2)
 
         gaps: list = []
         cx = char_x0
@@ -157,21 +157,24 @@ class TowerGenerator(BaseGenerator):
         return merged
 
     def _wall_layer_inset(self, x0: float, y0: float, width: float, depth: float,
-                          gaps: list, lh: float, lw: float, speed: float):
+                          gaps: list, lh: float, lw: float, speed: float,
+                          n_perims: int = 2):
         """
         Solid rectangular wall layer with inset gaps on the front face (Y = y0+depth).
 
         Identical to _anchor_layer when gaps is empty.  When gaps are supplied
-        both perimeter passes leave those X intervals unprinted on the front
-        face, creating ~2*spacing-deep grooves visible from the front.
+        all n_perims perimeter passes leave those X intervals unprinted on the
+        front face, creating ~n_perims*spacing-deep grooves visible from the
+        front.
 
-        gaps: sorted list of (x_start, x_end) intervals to omit.
+        gaps:     sorted list of (x_start, x_end) intervals to omit.
+        n_perims: number of perimeter loops (default 2; use 5 for deep inset text).
         """
         x1 = x0 + width
         y1 = y0 + depth
         spacing = lw - lh * (1.0 - math.pi / 4.0)
 
-        for i in range(2):
+        for i in range(n_perims):
             off  = i * spacing
             bx0  = x0 + off
             by0  = y0 + off
@@ -205,10 +208,10 @@ class TowerGenerator(BaseGenerator):
             self._line(bx0, by0, speed, lh, lw)
 
         # solid horizontal fill (spacing increment = full coverage)
-        ix0 = x0 + 2 * spacing
-        iy0 = y0 + 2 * spacing
-        ix1 = x1 - 2 * spacing
-        iy1 = y1 - 2 * spacing
+        ix0 = x0 + n_perims * spacing
+        iy0 = y0 + n_perims * spacing
+        ix1 = x1 - n_perims * spacing
+        iy1 = y1 - n_perims * spacing
         y   = iy0
         lr  = True
         while y <= iy1 + 1e-6:
@@ -271,11 +274,12 @@ class TowerGenerator(BaseGenerator):
             d_step      = 0.0
             x_step_cone = 0.0
 
-        # Face-text geometry: digits span 2/3 of module_height, centred vertically
-        seg_len   = c.module_height / 3.0          # bar length
+        # Face-text geometry: digits span 90 % of module_height, centred vertically.
+        # seg_len = half the digit height (bar length); char_adv = char width + gap.
+        # nub < seg_len/2 is enforced in _digit_gaps so left/right bars don't merge.
+        seg_len    = c.module_height * 0.45         # bar length (digit height = 2*seg_len)
         z_base_txt = (c.module_height - 2.0 * seg_len) / 2.0   # bottom of glyph column
-        # Character advance: seg_len + 40 % gap
-        char_adv  = seg_len * 1.4
+        char_adv   = seg_len * 1.2                 # character advance (bar + 20 % gap)
 
         # ── layout ────────────────────────────────────────────────────────────
         if c.anchor == "none":
@@ -451,7 +455,7 @@ class TowerGenerator(BaseGenerator):
                         )
                         self._wall_layer_inset(
                             long_x0, y0, long_w, c.module_depth,
-                            gaps, lh, lw, speed,
+                            gaps, lh, lw, speed, n_perims=5,
                         )
                     else:
                         self._anchor_layer(
