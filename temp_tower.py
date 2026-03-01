@@ -267,10 +267,16 @@ class TowerGenerator(BaseGenerator):
                     break
                 self._perimeter(wx0, wy0, wx1, wy1, speed, lh, lw)
 
-            # Temperature label at the first layer of each segment
-            if c.label_tab and layer_idx % layers_per_seg == 0:
-                self._comment(f"Label: {temp} °C")
-                self._draw_number(label_x, label_y, float(temp), lh, lw, speed)
+            # Label tab: solid fill every layer for support; digits at segment starts
+            if c.label_tab:
+                tab_h = self._SEG_LEN * 2.0
+                if layer_idx % layers_per_seg == 0:
+                    # Segment transition: digit lines replace the fill on this layer
+                    self._comment(f"Label: {temp} °C")
+                    self._draw_number(label_x, label_y, float(temp), lh, lw, speed)
+                else:
+                    # All other layers: raster fill keeps the column structurally sound
+                    self._anchor_layer(label_x, label_y, tab_w, tab_h, lh, lw, speed)
 
         # ── end G-code ─────────────────────────────────────────────────────────
         self._blank()
