@@ -176,29 +176,39 @@ def _write_bgcode(gcode_text: str, dest) -> int:
         obj = _zlib.compressobj(level=6, wbits=-15)
         return obj.compress(data) + obj.flush()
 
-    def _block(btype: int, payload: bytes, compress: bool = False) -> bytes:
+    def _block(btype: int, params: bytes, data: bytes, compress: bool = False) -> bytes:
+        # Per the libbgcode spec, the block layout is:
+        #   header (8 or 12 bytes)
+        #   params (block-specific parameters, written UNCOMPRESSED)
+        #   payload (compressed or raw data, NOT including params)
+        #   checksum (CRC32 of header + params + payload)
+        # uncompressed_size / compressed_size refer to the payload only.
         if compress:
-            data = _deflate(payload)
-            hdr  = struct.pack("<HHII", btype, COMP_DEFLATE, len(payload), len(data))
+            payload = _deflate(data)
+            hdr     = struct.pack("<HHII", btype, COMP_DEFLATE, len(data), len(payload))
         else:
-            data = payload
-            hdr  = struct.pack("<HHI",  btype, COMP_NONE,    len(payload))
+            payload = data
+            hdr     = struct.pack("<HHI",  btype, COMP_NONE,    len(data))
         cksum = _crc(hdr)
-        cksum = _crc(data, cksum)
-        return hdr + data + struct.pack("<I", cksum)
+        cksum = _crc(params, cksum)
+        cksum = _crc(payload, cksum)
+        return hdr + params + payload + struct.pack("<I", cksum)
 
     def _meta_block(btype: int, fields: Optional[dict] = None) -> bytes:
-        ini = "".join(f"{k}={v}\n" for k, v in (fields or {}).items())
-        payload = struct.pack("<H", ENC_INI) + ini.encode("utf-8")
-        return _block(btype, payload)
+        ini    = "".join(f"{k}={v}\n" for k, v in (fields or {}).items())
+        params = struct.pack("<H", ENC_INI)
+        data   = ini.encode("utf-8")
+        return _block(btype, params, data)
 
     file_hdr  = MAGIC + struct.pack("<IH", VERSION, CKSUM_CRC32)
     meta_blks = (
         _meta_block(BLK_PRINTER_META)
         + _meta_block(BLK_PRINT_META, {"generator": "prusa_cal"})
     )
-    gcode_payload = struct.pack("<H", ENC_RAW) + gcode_text.encode("utf-8")
-    gcode_blk     = _block(BLK_GCODE, gcode_payload, compress=True)
+    gcode_blk = _block(BLK_GCODE,
+                       params=struct.pack("<H", ENC_RAW),
+                       data=gcode_text.encode("utf-8"),
+                       compress=True)
 
     content = file_hdr + meta_blks + gcode_blk
 
@@ -790,20 +800,21 @@ def handle_output(gcode: str, args, default_stem: str) -> None:
             sys.stdout.write(gcode)
 
     def _upload_data() -> bytes:
-        if args.binary:
-            buf = io.BytesIO()
-            _write_bgcode(gcode, buf)
-            return buf.getvalue()
-        return gcode.encode("utf-8")
+        # Always upload as bgcode (DEFLATE-compressed) regardless of local
+        # output format — PrusaLink/PrusaConnect accept bgcode natively and
+        # the compressed payload avoids HTTP 413 errors on large files.
+        buf = io.BytesIO()
+        _write_bgcode(gcode, buf)
+        return buf.getvalue()
 
     def _remote_name(service: str) -> str:
         explicit = getattr(args, f"{service}_filename", None)
         if explicit:
             return explicit
         if args.output:
-            return os.path.basename(args.output)
-        ext = ".bgcode" if args.binary else ".gcode"
-        return default_stem + ext
+            stem = os.path.splitext(os.path.basename(args.output))[0]
+            return stem + ".bgcode"
+        return default_stem + ".bgcode"
 
     if getattr(args, "prusalink_url", None):
         if not getattr(args, "prusalink_key", None):
