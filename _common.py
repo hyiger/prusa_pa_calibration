@@ -382,6 +382,128 @@ def _write_bgcode(gcode_text: str, dest, thumbnails=()) -> int:
     return len(content)
 
 
+def bgcode_to_ascii(data: bytes) -> str:
+    """Extract ASCII G-code from Prusa binary G-code (.bgcode) data.
+
+    Parses every block in the file, locates all GCode blocks (type 1),
+    decompresses their payloads if needed, and returns the concatenated
+    G-code as a plain text string.  CRC32 is validated for every block.
+
+    Supported compression:
+        COMP_NONE (0)    — raw payload, no decompression needed
+        COMP_DEFLATE (1) — zlib-wrapped DEFLATE (wbits=15)
+
+    Supported encoding:
+        ENC_RAW (0) — plain UTF-8 text
+
+    Args:
+        data: raw bytes of a .bgcode file (e.g. from open(path, "rb").read()).
+
+    Returns:
+        ASCII G-code string (concatenation of all GCode blocks in order).
+
+    Raises:
+        ValueError: on bad magic bytes, CRC mismatch, truncated data,
+                    no GCode blocks found, or an unsupported compression /
+                    encoding type (Heatshrink, MeatPack).
+    """
+    import struct
+    import zlib as _zlib
+
+    MAGIC         = b"GCDE"
+    BLK_GCODE     = 1
+    BLK_THUMBNAIL = 5   # thumbnail params are 6 bytes; all others are 2
+    COMP_NONE     = 0
+    COMP_DEFLATE  = 1
+    ENC_RAW       = 0   # plain UTF-8; same numeric value as ENC_INI for metadata
+
+    if len(data) < 10:
+        raise ValueError(
+            f"Data too short ({len(data)} bytes) to be a bgcode file"
+        )
+    if data[:4] != MAGIC:
+        raise ValueError(
+            f"Not a bgcode file: expected magic {MAGIC!r}, got {data[:4]!r}"
+        )
+
+    # File header: magic(4) + version(uint32) + checksum_type(uint16) = 10 bytes
+    pos = 10
+    parts: list[str] = []
+
+    while pos < len(data):
+        if pos + 8 > len(data):
+            raise ValueError(f"Truncated block header at offset {pos}")
+
+        btype, comp = struct.unpack_from("<HH", data, pos)
+        uncomp_size, = struct.unpack_from("<I", data, pos + 4)
+
+        if comp == COMP_NONE:
+            comp_size = uncomp_size
+            hdr_len = 8
+        elif comp in (COMP_DEFLATE, 2, 3):   # DEFLATE or either Heatshrink variant
+            if pos + 12 > len(data):
+                raise ValueError(f"Truncated block header at offset {pos}")
+            comp_size, = struct.unpack_from("<I", data, pos + 8)
+            hdr_len = 12
+        else:
+            raise ValueError(f"Unknown compression type {comp} at offset {pos}")
+
+        # Thumbnail blocks have 6-byte params; every other block type has 2.
+        params_len   = 6 if btype == BLK_THUMBNAIL else 2
+        params_start = pos + hdr_len
+        payload_start = params_start + params_len
+        payload_end   = payload_start + comp_size
+
+        if payload_end + 4 > len(data):
+            raise ValueError(
+                f"Truncated block payload at offset {pos}: "
+                f"need {payload_end + 4 - len(data)} more bytes"
+            )
+
+        # CRC32 covers: block header bytes + params bytes + payload bytes
+        stored_crc, = struct.unpack_from("<I", data, payload_end)
+        computed_crc = _zlib.crc32(data[pos:payload_end]) & 0xFFFFFFFF
+        if computed_crc != stored_crc:
+            raise ValueError(
+                f"CRC32 mismatch in block type {btype} at offset {pos}: "
+                f"computed {computed_crc:#010x}, stored {stored_crc:#010x}"
+            )
+
+        if btype == BLK_GCODE:
+            enc, = struct.unpack_from("<H", data, params_start)
+            payload = data[payload_start:payload_end]
+
+            if comp == COMP_NONE:
+                raw = payload
+            elif comp == COMP_DEFLATE:
+                try:
+                    raw = _zlib.decompress(payload)
+                except _zlib.error as e:
+                    raise ValueError(
+                        f"DEFLATE decompression failed at offset {pos}: {e}"
+                    ) from e
+            else:
+                raise ValueError(
+                    f"Unsupported GCode block compression {comp} at offset {pos} "
+                    f"(Heatshrink decoding requires a third-party library)"
+                )
+
+            if enc != ENC_RAW:
+                raise ValueError(
+                    f"Unsupported GCode block encoding {enc} at offset {pos} "
+                    f"(MeatPack decoding is not supported)"
+                )
+
+            parts.append(raw.decode("utf-8"))
+
+        pos = payload_end + 4   # advance past payload + CRC32
+
+    if not parts:
+        raise ValueError("No GCode blocks found in bgcode data")
+
+    return "".join(parts)
+
+
 def _upload_prusaconnect(
     data: bytes,
     filename: str,
