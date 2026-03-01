@@ -173,7 +173,10 @@ def _write_bgcode(gcode_text: str, dest) -> int:
         return _zlib.crc32(data, prev) & 0xFFFFFFFF
 
     def _deflate(data: bytes) -> bytes:
-        obj = _zlib.compressobj(level=6, wbits=-15)
+        # Use zlib-wrapped DEFLATE (wbits=15, header 0x78 0x9C).
+        # libbgcode's uncompress() calls inflateInit() which defaults to
+        # zlib format — raw DEFLATE (wbits=-15) is rejected.
+        obj = _zlib.compressobj(level=6, wbits=15)
         return obj.compress(data) + obj.flush()
 
     def _block(btype: int, params: bytes, data: bytes, compress: bool = False) -> bytes:
@@ -200,10 +203,14 @@ def _write_bgcode(gcode_text: str, dest) -> int:
         data   = ini.encode("utf-8")
         return _block(btype, params, data)
 
+    BLK_FILE_META    = 0
+
     file_hdr  = MAGIC + struct.pack("<IH", VERSION, CKSUM_CRC32)
     meta_blks = (
-        _meta_block(BLK_PRINTER_META)
-        + _meta_block(BLK_PRINT_META, {"generator": "prusa_cal"})
+        # FileMetadata must be the first block (libbgcode sequence validation)
+        _meta_block(BLK_FILE_META,     {"Producer": "prusa_pa_calibration"})
+        + _meta_block(BLK_PRINTER_META)
+        + _meta_block(BLK_PRINT_META,  {"generator": "prusa_pa_calibration"})
     )
     gcode_blk = _block(BLK_GCODE,
                        params=struct.pack("<H", ENC_RAW),
