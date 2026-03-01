@@ -916,7 +916,7 @@ class BaseGenerator:
 def add_common_args(p: argparse.ArgumentParser, default_stem: str = "output") -> None:
     """Add shared CLI arguments to parser p (modifies in place).
 
-    Adds: --printer, --filament, all shared option groups, -o/--binary,
+    Adds: --printer, --filament, all shared option groups, -o/--ascii,
     and the PrusaLink/PrusaConnect upload groups.
 
     Call this first in _build_parser(), then add script-specific groups.
@@ -1008,11 +1008,11 @@ def add_common_args(p: argparse.ArgumentParser, default_stem: str = "output") ->
 
     p.add_argument("-o", "--output", metavar="FILE",
                    help="Write G-code to FILE (default: stdout)")
-    p.add_argument("--binary", action="store_true",
+    p.add_argument("--ascii", action="store_true",
                    help=(
-                       "Output Prusa binary G-code v1 (.bgcode) instead of ASCII. "
-                       "Use -o with a .bgcode extension, e.g. -o cal.bgcode. "
-                       "Without -o, binary is written to stdout (pipe to a file)."
+                       "Output plain ASCII G-code instead of Prusa binary (.bgcode). "
+                       "Binary is the default; use -o with a .gcode extension when "
+                       "passing --ascii, e.g. -o cal.gcode."
                    ))
 
     g = p.add_argument_group("PrusaLink upload (local network)")
@@ -1025,8 +1025,7 @@ def add_common_args(p: argparse.ArgumentParser, default_stem: str = "output") ->
                    help="PrusaLink API key (Settings → API Key in the printer web UI)")
     g.add_argument("--prusalink-filename", metavar="NAME",
                    help=f"Filename to store on the printer "
-                        f"(default: basename of -o, or {default_stem}.gcode / "
-                        f"{default_stem}.bgcode)")
+                        f"(default: basename of -o, or {default_stem}.bgcode)")
     g.add_argument("--prusalink-print", action="store_true",
                    help="Start printing immediately after upload")
 
@@ -1104,11 +1103,15 @@ def resolve_presets(args, script_dir: str) -> tuple:
 def handle_output(gcode: str, args, default_stem: str, thumbnails=()) -> None:
     """Write G-code to file/stdout and handle PrusaLink/PrusaConnect uploads.
 
-    thumbnails — optional sequence of (width, height, png_bytes) tuples passed
-                 to _write_bgcode() when producing binary output.  Plain text
-                 output ignores this parameter.
+    Default output format is Prusa binary G-code v1 (.bgcode).
+    Pass --ascii to get plain text instead.
+
+    thumbnails — optional sequence of (width, height, png_bytes) tuples:
+                 embedded as BLK_THUMBNAIL blocks in binary output, or as
+                 PrusaSlicer-style base64 comment blocks in ASCII output.
     """
-    if args.binary:
+    if not getattr(args, "ascii", False):
+        # Binary output (default)
         if args.output:
             n = _write_bgcode(gcode, args.output, thumbnails=thumbnails)
             lines = gcode.count("\n")
@@ -1117,8 +1120,9 @@ def handle_output(gcode: str, args, default_stem: str, thumbnails=()) -> None:
         else:
             _write_bgcode(gcode, sys.stdout.buffer, thumbnails=thumbnails)
     else:
-        # ASCII output: prepend PrusaSlicer-style base64 thumbnail comment blocks
-        # so slicer previews (OrcaSlicer, PrusaSlicer, etc.) can show the image.
+        # ASCII output (--ascii): prepend PrusaSlicer-style base64 thumbnail
+        # comment blocks so slicer previews (OrcaSlicer, PrusaSlicer, etc.)
+        # can show the image.
         thumb_hdr = _thumbnails_to_gcode_comments(thumbnails)
         out_gcode = thumb_hdr + gcode
         if args.output:
