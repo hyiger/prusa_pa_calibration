@@ -7,8 +7,8 @@ Python CLI tools that generate calibration G-code for Prusa printers (Mini, MK4S
 | File | Role |
 |---|---|
 | `_common.py` | Shared infrastructure (presets, base classes, CLI helpers, upload) |
-| `pa_cal.py` | Linear Advance calibration — imports from `_common` |
-| `temp_tower.py` | Temperature tower calibration — imports from `_common` |
+| `pa_calibration.py` | Linear Advance calibration — imports from `_common` |
+| `temperature_tower.py` | Temperature tower calibration — imports from `_common` |
 
 ## Architecture
 
@@ -28,12 +28,12 @@ _common.py
 ├─ resolve_presets(args, dir) — printer/filament lookup, template loading
 └─ handle_output(gcode, args, stem) — file write + upload
 
-pa_cal.py
+pa_calibration.py
 ├─ Config(CommonConfig)       — adds la_start/end/step, layer_count, pattern geometry, labels
 ├─ Generator(BaseGenerator)   — adds _set_la, _pattern, generate()
 └─ main()                     — resolve_presets → Config → Generator → handle_output
 
-temp_tower.py
+temperature_tower.py
 ├─ Config(CommonConfig)       — adds temp_start/end/step, module_height/depth, bridge_length/thick,
 │                                short/long_angle, n_cones, base_thick, label_tab, grid_infill, infill_density
 ├─ TowerGenerator(BaseGenerator) — adds _grid_layer, generate() with per-segment M104/M109 commands
@@ -107,8 +107,8 @@ Implemented in `_write_bgcode()` in `_common.py` using only `struct` and `zlib`.
 ## Known edge cases
 
 - **Float range overflow**: `round((la_end - la_start) / la_step) + 1` pattern count can be off by one if step doesn't divide evenly. Not currently clamped.
-- **Number label density** (pa_cal): only even-indexed patterns get labels (`if i % 2 != 0: continue`). For very fine steps with many patterns, labels can still be crowded.
-- **K reset at end** (pa_cal): `_set_la(la_start)` is emitted before the end template, and the end template also emits `M900 K0`. Intentional redundancy; the end template reset is the authoritative one.
+- **Number label density** (pa_calibration): only even-indexed patterns get labels (`if i % 2 != 0: continue`). For very fine steps with many patterns, labels can still be crowded.
+- **K reset at end** (pa_calibration): `_set_la(la_start)` is emitted before the end template, and the end template also emits `M900 K0`. Intentional redundancy; the end template reset is the authoritative one.
 - **Mini retraction**: the MINI preset sets bed size and max_z but does not force longer retraction (Bowden typically needs 2–4 mm). Users should add `--retract-dist 2.0` manually when using `--printer MINI`.
 
 ## Testing
@@ -116,18 +116,18 @@ Implemented in `_write_bgcode()` in `_common.py` using only `struct` and `zlib`.
 No automated test suite. Validate changes by:
 1. Running both scripts and checking they produce valid output:
    ```bash
-   python3 pa_cal.py -o /tmp/pa_test.gcode
-   python3 temp_tower.py -o /tmp/tt_test.gcode
+   python3 pa_calibration.py -o /tmp/pa_test.gcode
+   python3 temperature_tower.py -o /tmp/tt_test.gcode
    ```
 2. Inspecting the G-code in PrusaSlicer or OrcaSlicer preview to verify geometry.
 3. Checking preset resolution works correctly:
    ```bash
-   python3 pa_cal.py --printer MK4S --filament PETG 2>&1 | head -3
-   python3 temp_tower.py --printer MK4S --filament PETG 2>&1 | head -3
+   python3 pa_calibration.py --printer MK4S --filament PETG 2>&1 | head -3
+   python3 temperature_tower.py --printer MK4S --filament PETG 2>&1 | head -3
    ```
 4. Checking the bed-overflow warning fires:
    ```bash
-   python3 pa_cal.py --la-start 0 --la-end 20 --la-step 1 -o /dev/null
+   python3 pa_calibration.py --la-start 0 --la-end 20 --la-step 1 -o /dev/null
    ```
 
 ## Common tasks
@@ -156,4 +156,4 @@ No automated test suite. Validate changes by:
 2. Document it in the script's module docstring and README.
 
 **Change the PA pattern shape:**
-- Geometry lives in `_pattern()` in `pa_cal.py`. The half-angle and spacing formula must stay consistent with `_pattern_width()` and `_pattern_height()` or layout will break.
+- Geometry lives in `_pattern()` in `pa_calibration.py`. The half-angle and spacing formula must stay consistent with `_pattern_width()` and `_pattern_height()` or layout will break.

@@ -2,7 +2,7 @@
 _common.py — Shared infrastructure for Prusa calibration G-code generators.
 
 Provides printer/filament presets, G-code utilities, base configuration,
-base generator class, and CLI helpers shared by pa_cal.py and temp_tower.py.
+base generator class, and CLI helpers shared by pa_calibration.py and temperature_tower.py.
 """
 
 import argparse

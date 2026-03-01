@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-temp_tower.py — Temperature tower G-code generator for Prusa printers
+temperature_tower.py — Temperature tower G-code generator for Prusa printers
 
 Generates a multi-segment temperature tower inspired by the "Advanced temp tower"
 design by Tronnic.  Each temperature segment features:
@@ -16,16 +16,16 @@ slab surface.  Digits are visible in slicer top-down preview and build up
 
 Usage:
     # PLA: scan 215 → 185 °C in 5 °C steps (default)
-    python3 temp_tower.py -o temp_tower.gcode
+    python3 temperature_tower.py -o temperature_tower.gcode
 
     # PETG on Core One: 240 → 210 °C
-    python3 temp_tower.py --filament PETG --temp-start 240 --temp-end 210 -o petg_tower.gcode
+    python3 temperature_tower.py --filament PETG --temp-start 240 --temp-end 210 -o petg_tower.gcode
 
     # ABS on MK4S with custom range
-    python3 temp_tower.py --printer MK4S --filament ABS --temp-start 250 --temp-end 220 -o abs_tower.gcode
+    python3 temperature_tower.py --printer MK4S --filament ABS --temp-start 250 --temp-end 220 -o abs_tower.gcode
 
     # Custom geometry
-    python3 temp_tower.py --module-height 8 --bridge-length 25 -o custom_tower.gcode
+    python3 temperature_tower.py --module-height 8 --bridge-length 25 -o custom_tower.gcode
 
 Template variables available in --start-gcode / --end-gcode files:
     {bed_temp}      Bed temperature (°C)
@@ -416,14 +416,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "  4. Optionally run a fine scan (--temp-step 2) centred on your winner.\n"
             "\n"
             "Examples:\n"
-            "  PETG on Core One:  temp_tower.py --filament PETG -o petg_tower.gcode\n"
-            "  ABS on MK4S:       temp_tower.py --printer MK4S --filament ABS -o abs_tower.gcode\n"
-            "  Fine scan around 230:  temp_tower.py --temp-start 235 --temp-end 225 "
+            "  PETG on Core One:  temperature_tower.py --filament PETG -o petg_tower.gcode\n"
+            "  ABS on MK4S:       temperature_tower.py --printer MK4S --filament ABS -o abs_tower.gcode\n"
+            "  Fine scan around 230:  temperature_tower.py --temp-start 235 --temp-end 225 "
             "--temp-step 2 -o fine.gcode"
         ),
     )
 
-    add_common_args(p, "temp_tower")
+    add_common_args(p, "temperature_tower")
 
     g = p.add_argument_group("Temperature tower")
     g.add_argument("--temp-start", type=int, default=None, metavar="°C",
@@ -524,7 +524,7 @@ def main():
     gen   = TowerGenerator(cfg, start_template=start_tmpl, end_template=end_tmpl)
     gcode = gen.generate()
 
-    handle_output(gcode, args, "temp_tower")
+    handle_output(gcode, args, "temperature_tower")
 
 
 if __name__ == "__main__":

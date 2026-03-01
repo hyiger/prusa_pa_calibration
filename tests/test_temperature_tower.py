@@ -1,4 +1,4 @@
-"""Unit tests for temp_tower.py — temperature tower generator."""
+"""Unit tests for temperature_tower.py — temperature tower generator."""
 
 import io
 import math
@@ -6,7 +6,7 @@ import re
 import unittest
 from unittest import mock
 
-from temp_tower import Config, TowerGenerator
+from temperature_tower import Config, TowerGenerator
 from _common import BaseGenerator
 
 

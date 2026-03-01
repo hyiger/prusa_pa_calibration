@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-pa_cal.py — Linear Advance calibration G-code generator for Prusa Core One
+pa_calibration.py — Linear Advance calibration G-code generator for Prusa printers
 
 Generates a test print with multiple corner-pattern pieces, each at a different
 Linear Advance (M900 K) value, so you can visually pick the best setting.
 
 Usage:
-    python pa_cal.py -o la_cal.gcode
-    python pa_cal.py --la-start 0 --la-end 4 --la-step 1 -o coarse.gcode
-    python pa_cal.py --la-start 1.5 --la-end 2.5 --la-step 0.1 --side-length 11 -o fine.gcode
-    python pa_cal.py --hotend-temp 235 --bed-temp 85 -o petg.gcode
+    python pa_calibration.py -o la_cal.gcode
+    python pa_calibration.py --la-start 0 --la-end 4 --la-step 1 -o coarse.gcode
+    python pa_calibration.py --la-start 1.5 --la-end 2.5 --la-step 0.1 --side-length 11 -o fine.gcode
+    python pa_calibration.py --hotend-temp 235 --bed-temp 85 -o petg.gcode
 
 Inspect output in PrusaSlicer / OrcaSlicer preview or any G-code viewer.
 The pattern with the sharpest corners (no bulge, no gap) gives the best K value.
@@ -326,17 +326,17 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=(
             "Workflow:\n"
-            "  1. Coarse scan (default): pa_cal.py -o coarse.gcode\n"
+            "  1. Coarse scan (default): pa_calibration.py -o coarse.gcode\n"
             "     → prints K=0,1,2,3,4; pick the best-looking column\n"
             "  2. Fine scan around winner (e.g. best was K=2):\n"
-            "     pa_cal.py --la-start 1.5 --la-end 2.5 --la-step 0.1"
+            "     pa_calibration.py --la-start 1.5 --la-end 2.5 --la-step 0.1"
             " --side-length 11 -o fine.gcode\n"
             "  3. PETG on MK4S:\n"
-            "     pa_cal.py --printer MK4S --filament PETG -o petg.gcode"
+            "     pa_calibration.py --printer MK4S --filament PETG -o petg.gcode"
         ),
     )
 
-    add_common_args(p, "pa_cal")
+    add_common_args(p, "pa_calibration")
 
     g = p.add_argument_group("Linear Advance")
     g.add_argument("--la-start", type=float, default=0.0, metavar="K",
@@ -418,7 +418,7 @@ def main():
     gen   = Generator(cfg, start_template=start_tmpl, end_template=end_tmpl)
     gcode = gen.generate()
 
-    handle_output(gcode, args, "pa_cal")
+    handle_output(gcode, args, "pa_calibration")
 
 
 if __name__ == "__main__":
