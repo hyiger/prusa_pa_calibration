@@ -254,20 +254,33 @@ def _thumbnail_pa(w: int, h: int) -> bytes:
 
 
 def _thumbnail_tower(w: int, h: int) -> bytes:
-    """Thumbnail for temperature tower: stepped rectangular silhouette."""
-    r      = _Raster(w, h)
-    n      = max(2, min(6, h // 16))
-    my     = max(1, h // 10)
-    seg_h  = max(1, (h - 2 * my) // n)
-    max_w  = int(w * 0.80)
-    min_w  = int(w * 0.30)
-    step_w = (max_w - min_w) // max(1, n - 1)
+    """Thumbnail for temperature tower: uniform column with segment dividers and side wings."""
+    r = _Raster(w, h)
+    n = max(2, min(7, h // 16))
+
+    # Central column (uniform width — matches the actual rectangular tower)
+    col_w  = max(4, w * 9 // 20)
+    col_x0 = (w - col_w) // 2
+    col_x1 = col_x0 + col_w
+    top_m  = max(1, h // 10)
+    r.fill_rect(col_x0, top_m, col_x1, h)
+
+    # Horizontal segment dividers (thin background-coloured gaps)
+    seg_h = (h - top_m) // n
+    for i in range(1, n):
+        y = top_m + i * seg_h
+        r.fill_rect(col_x0, y, col_x1, y + 1, _THUMB_BG)
+
+    # Overhang wing stubs: small tabs on each side, centred within each segment
+    wing_w = max(1, col_x0 * 2 // 3)
+    wing_h = max(1, seg_h * 3 // 8)
     for i in range(n):
-        seg_w = max_w - i * step_w
-        x0    = (w - seg_w) // 2
-        y0    = h - my - (i + 1) * seg_h
-        y1    = h - my - i * seg_h
-        r.fill_rect(x0, y0, x0 + seg_w, y1)
+        cy  = top_m + i * seg_h + seg_h // 2
+        wy0 = cy - wing_h // 2
+        wy1 = wy0 + wing_h
+        r.fill_rect(col_x0 - wing_w, wy0, col_x0, wy1)
+        r.fill_rect(col_x1,          wy0, col_x1 + wing_w, wy1)
+
     return r.to_png()
 
 
