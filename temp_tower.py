@@ -11,10 +11,10 @@ design by Tronnic.  Each temperature segment features:
   - Stringing-test cones in the open bridge gap
   - Bridging slab spanning the gap at the top of each segment
 
-The temperature label is embedded in the long-side wall's front face using
-7-segment digit cross-sections printed layer by layer:
-  - Horizontal bars → one extrusion line at the exact Z level
-  - Vertical bars   → tiny horizontal nubs at each intermediate layer
+The temperature label is inset into the long-side wall's front face using
+7-segment digit geometry: at each layer the front-face perimeter is printed
+with gaps (unprinted segments) at digit bar positions, creating recessed
+grooves ~2 line-widths deep that spell out the temperature number.
 
 Usage:
     # PLA: scan 215 → 185 °C in 5 °C steps (default)
@@ -95,78 +95,131 @@ class TowerGenerator(BaseGenerator):
                  end_template:   Optional[str] = None):
         super().__init__(cfg, start_template, end_template)
 
-    # ── face text rendering ────────────────────────────────────────────────────
+    # ── inset face-text rendering ──────────────────────────────────────────────
 
-    def _face_number(self, char_x0: float, y_face: float, value: int,
-                     seg_len: float, z_base: float, local_z: float,
-                     lh: float, lw: float, speed: float):
+    def _digit_gaps(self, temp: int, seg_len: float, z_base: float,
+                    local_z: float, char_x0: float, char_adv: float,
+                    lh: float, lw: float) -> list:
         """
-        Draw a temperature number on the front face (Y=y_face) at local_z.
+        Return sorted, merged [(x0, x1)] gap intervals for this layer.
 
-        Digits are oriented in the XZ plane so they read correctly from the
-        front of the tower.  At each layer height the method draws whatever
-        cross-section of the 7-segment glyphs intersects that Z:
+        Gaps are the X positions where the front-face perimeter should NOT be
+        printed — i.e. the positions of each active 7-segment bar at local_z.
+        Leaving these positions open creates inset (engraved) digit strokes.
 
-          - Horizontal bars (top / mid / bottom): one extrusion line at the
-            exact Z level, spanning seg_len in X.
-          - Vertical bars (tl, tr, bl, br): a small horizontal nub (lw wide)
-            at the bar's X edge on every intermediate layer within the bar's
-            Z range.
-
-        seg_len  : length of each 7-segment bar in mm (digit height = 2*seg_len)
-        z_base   : local_z at the bottom of the glyph column
+        Horizontal bars are active for ±lh around their Z level (2 layers).
+        Vertical bar notches are active between adjacent horizontal bars.
         """
-        SL  = seg_len
-        GAP = SL * 0.4       # gap between characters
-        tol = lh * 0.55      # Z window for hitting a horizontal bar's layer
-        nub = lw * 1.5       # width of vertical-bar nub
+        SL    = seg_len
+        h_tol = lh * 1.0          # horizontal bar: active over ±1 layer
+        v_tol = lh * 1.0          # exclusion zone near horizontal bar levels
+        nub   = lw * 3.0          # notch width for vertical bars
 
+        gaps: list = []
         cx = char_x0
-        for ch in str(value):
+        for ch in str(temp):
             if ch not in self._SEGS:
-                cx += SL + GAP
+                cx += char_adv
                 continue
             t, tr, br, bot, bl, tl, mid = self._SEGS[ch]
-
             z_bot = z_base
             z_mid = z_base + SL
             z_top = z_base + 2 * SL
 
-            # ── horizontal bars (one layer each) ────────────────────────────
-            if bot and abs(local_z - z_bot) < tol:
-                self._travel(cx, y_face)
-                self._line(cx + SL, y_face, speed, lh, lw)
+            # Horizontal bars (full-width gap at their Z level)
+            if bot and abs(local_z - z_bot) < h_tol:
+                gaps.append((cx, cx + SL))
+            if mid and abs(local_z - z_mid) < h_tol:
+                gaps.append((cx, cx + SL))
+            if t   and abs(local_z - z_top) < h_tol:
+                gaps.append((cx, cx + SL))
 
-            if mid and abs(local_z - z_mid) < tol:
-                self._travel(cx, y_face)
-                self._line(cx + SL, y_face, speed, lh, lw)
+            # Vertical bar notches (narrow gap on the appropriate X edge)
+            if br and z_bot + v_tol < local_z < z_mid - v_tol:
+                gaps.append((_r(cx + SL - nub, _XY), cx + SL))
+            if tr and z_mid + v_tol < local_z < z_top - v_tol:
+                gaps.append((_r(cx + SL - nub, _XY), cx + SL))
+            if bl and z_bot + v_tol < local_z < z_mid - v_tol:
+                gaps.append((cx, _r(cx + nub, _XY)))
+            if tl and z_mid + v_tol < local_z < z_top - v_tol:
+                gaps.append((cx, _r(cx + nub, _XY)))
 
-            if t and abs(local_z - z_top) < tol:
-                self._travel(cx, y_face)
-                self._line(cx + SL, y_face, speed, lh, lw)
+            cx += char_adv
 
-            # ── vertical bars (nub at each intermediate layer) ───────────────
-            # Bottom-right bar
-            if br and z_bot + tol < local_z < z_mid - tol:
-                self._travel(cx + SL, y_face)
-                self._line(cx + SL - nub, y_face, speed, lh, lw)
+        # Sort and merge overlapping intervals
+        gaps.sort()
+        merged: list = []
+        for g0, g1 in gaps:
+            if merged and g0 < merged[-1][1] + 1e-4:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], g1))
+            else:
+                merged.append((g0, g1))
+        return merged
 
-            # Top-right bar
-            if tr and z_mid + tol < local_z < z_top - tol:
-                self._travel(cx + SL, y_face)
-                self._line(cx + SL - nub, y_face, speed, lh, lw)
+    def _wall_layer_inset(self, x0: float, y0: float, width: float, depth: float,
+                          gaps: list, lh: float, lw: float, speed: float):
+        """
+        Solid rectangular wall layer with inset gaps on the front face (Y = y0+depth).
 
-            # Bottom-left bar
-            if bl and z_bot + tol < local_z < z_mid - tol:
-                self._travel(cx, y_face)
-                self._line(cx + nub, y_face, speed, lh, lw)
+        Identical to _anchor_layer when gaps is empty.  When gaps are supplied
+        both perimeter passes leave those X intervals unprinted on the front
+        face, creating ~2*spacing-deep grooves visible from the front.
 
-            # Top-left bar
-            if tl and z_mid + tol < local_z < z_top - tol:
-                self._travel(cx, y_face)
-                self._line(cx + nub, y_face, speed, lh, lw)
+        gaps: sorted list of (x_start, x_end) intervals to omit.
+        """
+        x1 = x0 + width
+        y1 = y0 + depth
+        spacing = lw - lh * (1.0 - math.pi / 4.0)
 
-            cx += SL + GAP
+        for i in range(2):
+            off  = i * spacing
+            bx0  = x0 + off
+            by0  = y0 + off
+            bx1  = x1 - off
+            by1  = y1 - off
+
+            # back + right faces (always solid)
+            self._travel(bx0, by0)
+            self._line(bx1, by0, speed, lh, lw)
+            self._line(bx1, by1, speed, lh, lw)
+
+            # front face right-to-left, with gaps clipped to [bx0, bx1]
+            clipped = sorted(
+                [(max(bx0, g0), min(bx1, g1))
+                 for g0, g1 in gaps
+                 if g0 < bx1 - 1e-4 and g1 > bx0 + 1e-4
+                 and min(bx1, g1) - max(bx0, g0) > 1e-4],
+                reverse=True,
+            )
+            cx = bx1
+            for g0, g1 in clipped:
+                if cx > g1 + 1e-4:
+                    self._line(g1, by1, speed, lh, lw)
+                cx = g0
+                if cx > bx0 + 1e-4:
+                    self._travel(cx, by1)
+            if cx > bx0 + 1e-4:
+                self._line(bx0, by1, speed, lh, lw)
+
+            # left face
+            self._line(bx0, by0, speed, lh, lw)
+
+        # solid horizontal fill (spacing increment = full coverage)
+        ix0 = x0 + 2 * spacing
+        iy0 = y0 + 2 * spacing
+        ix1 = x1 - 2 * spacing
+        iy1 = y1 - 2 * spacing
+        y   = iy0
+        lr  = True
+        while y <= iy1 + 1e-6:
+            if lr:
+                self._travel(ix0, y)
+                self._line(ix1, y, speed, lh, lw)
+            else:
+                self._travel(ix1, y)
+                self._line(ix0, y, speed, lh, lw)
+            y  += spacing
+            lr  = not lr
 
     def generate(self) -> str:
         c  = self.cfg
@@ -385,21 +438,25 @@ class TowerGenerator(BaseGenerator):
                 if short_w > lw:
                     self._anchor_layer(sx0, y0, short_w, c.module_depth, lh, lw, speed)
 
-                # Long overhang wall — solid filled rectangle, growing rightward
+                # Long overhang wall — growing rightward, with optional inset label
                 long_w = lx1 - long_x0
                 if long_w > lw:
-                    self._anchor_layer(long_x0, y0, long_w, c.module_depth, lh, lw, speed)
-
-                # Temperature label: 7-segment cross-sections on the long wall front face
-                if c.label_tab:
-                    n_chars  = len(str(temp))
-                    text_w   = n_chars * char_adv
-                    # Centre text in the initial 20 mm width of the long wall
-                    char_x0  = _r(long_x0 + (20.0 - text_w) / 2.0, _XY)
-                    self._face_number(
-                        char_x0, y1, temp, seg_len, z_base_txt,
-                        local_z, lh, lw, speed,
-                    )
+                    if c.label_tab:
+                        n_chars = len(str(temp))
+                        text_w  = n_chars * char_adv
+                        char_x0 = _r(long_x0 + (20.0 - text_w) / 2.0, _XY)
+                        gaps    = self._digit_gaps(
+                            temp, seg_len, z_base_txt, local_z,
+                            char_x0, char_adv, lh, lw,
+                        )
+                        self._wall_layer_inset(
+                            long_x0, y0, long_w, c.module_depth,
+                            gaps, lh, lw, speed,
+                        )
+                    else:
+                        self._anchor_layer(
+                            long_x0, y0, long_w, c.module_depth, lh, lw, speed
+                        )
 
                 # Stringing-test cones (in bridge gap, lower half of each segment)
                 if local_z < cone_h:

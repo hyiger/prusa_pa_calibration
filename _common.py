@@ -459,7 +459,7 @@ class BaseGenerator:
             else:
                 self._travel(ix1, y)
                 self._line(ix0, y, speed, lh, lw)
-            y += 2.0 * spacing
+            y += spacing
             lr = not lr
 
     def _circle(self, cx: float, cy: float, r: float, speed: float, lh: float, lw: float):
