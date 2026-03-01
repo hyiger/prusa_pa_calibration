@@ -204,20 +204,25 @@ def _write_bgcode(gcode_text: str, dest) -> int:
         return _block(btype, params, data)
 
     BLK_FILE_META    = 0
+    BLK_SLICER_META  = 2
 
+    # Required block sequence per libbgcode convert.cpp:
+    #   FileMetadata → PrinterMetadata → [Thumbnails] → GCode+ → PrintMetadata → SlicerMetadata
+    # PrintMetadata and SlicerMetadata MUST come after all GCode blocks;
+    # libbgcode returns InvalidSequenceOfBlocks otherwise.
     file_hdr  = MAGIC + struct.pack("<IH", VERSION, CKSUM_CRC32)
-    meta_blks = (
-        # FileMetadata must be the first block (libbgcode sequence validation)
-        _meta_block(BLK_FILE_META,     {"Producer": "prusa_pa_calibration"})
-        + _meta_block(BLK_PRINTER_META)
-        + _meta_block(BLK_PRINT_META,  {"generator": "prusa_pa_calibration"})
-    )
     gcode_blk = _block(BLK_GCODE,
                        params=struct.pack("<H", ENC_RAW),
                        data=gcode_text.encode("utf-8"),
                        compress=True)
-
-    content = file_hdr + meta_blks + gcode_blk
+    content = (
+        file_hdr
+        + _meta_block(BLK_FILE_META,    {"Producer": "prusa_pa_calibration"})
+        + _meta_block(BLK_PRINTER_META)
+        + gcode_blk
+        + _meta_block(BLK_PRINT_META,   {"generator": "prusa_pa_calibration"})
+        + _meta_block(BLK_SLICER_META)
+    )
 
     if isinstance(dest, (str, bytes)):
         with open(dest, "wb") as f:
