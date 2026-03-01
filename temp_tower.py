@@ -99,24 +99,35 @@ class TowerGenerator(BaseGenerator):
 
     def _grid_layer(self, x0: float, y0: float, sx: float, sy: float,
                     lh: float, lw: float, speed: float):
-        """Filled rectangle: 2 perimeters + crosshatch grid infill (~50%)."""
+        """Filled rectangle: 2 perimeters + 45° crosshatch grid infill."""
         self._anchor_frame(x0, y0, sx, sy, lh, lw, 2, speed)
         base_spacing = lw - lh * (1.0 - math.pi / 4.0)
-        pitch = base_spacing * (100.0 / self.cfg.infill_density)
+        pitch      = base_spacing * (100.0 / self.cfg.infill_density)
+        diag_pitch = pitch * math.sqrt(2.0)
         ix0 = x0 + 2 * base_spacing
         iy0 = y0 + 2 * base_spacing
         ix1 = x0 + sx - 2 * base_spacing
         iy1 = y0 + sy - 2 * base_spacing
-        y = iy0;  lr = True
-        while y <= iy1 + 1e-6:
-            if lr:  self._travel(ix0, y);  self._line(ix1, y,  speed, lh, lw)
-            else:   self._travel(ix1, y);  self._line(ix0, y,  speed, lh, lw)
-            y += pitch;  lr = not lr
-        x = ix0;  lr = True
-        while x <= ix1 + 1e-6:
-            if lr:  self._travel(x, iy0);  self._line(x, iy1,  speed, lh, lw)
-            else:   self._travel(x, iy1);  self._line(x, iy0,  speed, lh, lw)
-            x += pitch;  lr = not lr
+
+        # +45° lines: y = x − c  (parametrised by c = x − y)
+        c = ix0 - iy1;  lr = True
+        while c <= ix1 - iy0 + 1e-6:
+            xs = max(ix0, iy0 + c);  xe = min(ix1, iy1 + c)
+            if xe > xs + 1e-6:
+                if lr:  self._travel(xs, xs - c);  self._line(xe, xe - c, speed, lh, lw)
+                else:   self._travel(xe, xe - c);  self._line(xs, xs - c, speed, lh, lw)
+                lr = not lr
+            c += diag_pitch
+
+        # −45° lines: y = c − x  (parametrised by c = x + y)
+        c = ix0 + iy0;  lr = True
+        while c <= ix1 + iy1 + 1e-6:
+            xs = max(ix0, c - iy1);  xe = min(ix1, c - iy0)
+            if xe > xs + 1e-6:
+                if lr:  self._travel(xs, c - xs);  self._line(xe, c - xe, speed, lh, lw)
+                else:   self._travel(xe, c - xe);  self._line(xs, c - xs, speed, lh, lw)
+                lr = not lr
+            c += diag_pitch
 
     def generate(self) -> str:
         c  = self.cfg
