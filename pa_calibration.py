@@ -41,6 +41,7 @@ from _common import (
     FILAMENT_PRESETS, PRINTER_PRESETS, _DEFAULT_PRINTER,
     _r, _PA, _Z, _XY, _E, _render,
     add_common_args, resolve_presets, handle_output,
+    _thumbnail_pa,
 )
 
 
@@ -418,7 +419,11 @@ def main():
     gen   = Generator(cfg, start_template=start_tmpl, end_template=end_tmpl)
     gcode = gen.generate()
 
-    handle_output(gcode, args, "pa_calibration")
+    thumbs = [
+        (16,  16,  _thumbnail_pa(16, 16)),
+        (220, 124, _thumbnail_pa(220, 124)),
+    ]
+    handle_output(gcode, args, "pa_calibration", thumbnails=thumbs)
 
 
 if __name__ == "__main__":

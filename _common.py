@@ -146,11 +146,140 @@ def _render(template: str, vars: dict) -> str:
     return re.sub(r"\{([a-z][a-z0-9_]*)\}", sub, template)
 
 
-def _write_bgcode(gcode_text: str, dest) -> int:
+# ── Thumbnail generation ───────────────────────────────────────────────────────
+
+_THUMB_BG = (30, 30, 30)    # dark background (near-black)
+_THUMB_FG = (250, 104, 49)  # Prusa orange (#FA6831)
+
+
+def _make_png(width: int, height: int, pixels: list) -> bytes:
+    """Build a minimal PNG file from a flat list of (r, g, b) tuples (row-major).
+
+    Uses only struct and zlib from the Python stdlib — no PIL required.
+    """
+    import struct
+    import zlib as _zlib
+
+    def _crc32(data: bytes) -> int:
+        return _zlib.crc32(data) & 0xFFFF_FFFF
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data))
+                + tag + data
+                + struct.pack(">I", _crc32(tag + data)))
+
+    # IHDR: width, height, bit_depth=8, color_type=2 (RGB),
+    #       compression_method=0, filter_method=0, interlace_method=0
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+
+    # Each scanline: filter byte 0 (None) followed by RGB triples
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)   # filter type = None
+        for x in range(width):
+            r, g, b = pixels[y * width + x]
+            raw += bytes([r & 0xFF, g & 0xFF, b & 0xFF])
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", ihdr)
+        + _chunk(b"IDAT", _zlib.compress(bytes(raw), 6))
+        + _chunk(b"IEND", b"")
+    )
+
+
+class _Raster:
+    """Minimal pixel canvas used to draw bgcode thumbnails."""
+
+    def __init__(self, w: int, h: int,
+                 bg=_THUMB_BG, fg=_THUMB_FG):
+        self.w  = w
+        self.h  = h
+        self._fg = fg
+        self._px: list = [bg] * (w * h)
+
+    def _set(self, x: int, y: int, c=None) -> None:
+        if 0 <= x < self.w and 0 <= y < self.h:
+            self._px[y * self.w + x] = c if c is not None else self._fg
+
+    def fill_rect(self, x0: int, y0: int, x1: int, y1: int, c=None) -> None:
+        col = c if c is not None else self._fg
+        for y in range(max(0, y0), min(self.h, y1)):
+            for x in range(max(0, x0), min(self.w, x1)):
+                self._px[y * self.w + x] = col
+
+    def line(self, x0: int, y0: int, x1: int, y1: int,
+             thick: int = 1, c=None) -> None:
+        """Draw a line using Bresenham's algorithm with integer thickness."""
+        col = c if c is not None else self._fg
+        dx  = abs(x1 - x0)
+        dy  = abs(y1 - y0)
+        sx  = 1 if x0 < x1 else -1
+        sy  = 1 if y0 < y1 else -1
+        err = dx - dy
+        x, y = x0, y0
+        ht   = thick // 2
+        while True:
+            for tx in range(-ht, ht + 1):
+                for ty in range(-ht, ht + 1):
+                    self._set(x + tx, y + ty, col)
+            if x == x1 and y == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x   += sx
+            if e2 < dx:
+                err += dx
+                y   += sy
+
+    def to_png(self) -> bytes:
+        return _make_png(self.w, self.h, self._px)
+
+
+def _thumbnail_pa(w: int, h: int) -> bytes:
+    """Thumbnail for PA calibration: rows of V-chevron shapes on dark background."""
+    r   = _Raster(w, h)
+    n   = max(2, min(5, h // 20))
+    mx  = max(1, w // 10)
+    my  = max(1, h // 10)
+    thick = max(1, min(w, h) // 22)
+    band  = (h - 2 * my) / n
+    for i in range(n):
+        cy   = my + (i + 0.5) * band
+        arm  = max(1, int(band * 0.38))
+        r.line(mx,      int(cy),       w - mx, int(cy - arm), thick=thick)
+        r.line(mx,      int(cy),       w - mx, int(cy + arm), thick=thick)
+    return r.to_png()
+
+
+def _thumbnail_tower(w: int, h: int) -> bytes:
+    """Thumbnail for temperature tower: stepped rectangular silhouette."""
+    r      = _Raster(w, h)
+    n      = max(2, min(6, h // 16))
+    my     = max(1, h // 10)
+    seg_h  = max(1, (h - 2 * my) // n)
+    max_w  = int(w * 0.80)
+    min_w  = int(w * 0.30)
+    step_w = (max_w - min_w) // max(1, n - 1)
+    for i in range(n):
+        seg_w = max_w - i * step_w
+        x0    = (w - seg_w) // 2
+        y0    = h - my - (i + 1) * seg_h
+        y1    = h - my - i * seg_h
+        r.fill_rect(x0, y0, x0 + seg_w, y1)
+    return r.to_png()
+
+
+def _write_bgcode(gcode_text: str, dest, thumbnails=()) -> int:
     """
     Write gcode_text as a Prusa binary G-code v1 (.bgcode) file.
 
-    dest — file path (str/Path) or a binary-mode file object (e.g. sys.stdout.buffer).
+    dest       — file path (str/Path) or a binary-mode file object
+                 (e.g. sys.stdout.buffer).
+    thumbnails — optional sequence of (width, height, png_bytes) tuples;
+                 emitted as Thumbnail blocks between PrinterMetadata and
+                 PrintMetadata (the position PrusaSlicer uses).
     Returns the number of bytes written.
 
     Format reference: https://github.com/prusa3d/libbgcode
@@ -164,6 +293,8 @@ def _write_bgcode(gcode_text: str, dest) -> int:
     BLK_PRINTER_META = 3
     BLK_PRINT_META   = 4
     BLK_GCODE        = 1
+    BLK_THUMBNAIL    = 5
+    THUMB_FMT_PNG    = 0
     COMP_NONE        = 0
     COMP_DEFLATE     = 1
     ENC_INI          = 0
@@ -203,6 +334,12 @@ def _write_bgcode(gcode_text: str, dest) -> int:
         data   = ini.encode("utf-8")
         return _block(btype, params, data)
 
+    def _thumb_block(tw: int, th: int, png_bytes: bytes) -> bytes:
+        # Thumbnail params: format(uint16) + width(uint16) + height(uint16) = 6 bytes
+        # (verified against PrusaSlicer reference file — other block types use 2 bytes)
+        params = struct.pack("<HHH", THUMB_FMT_PNG, tw, th)
+        return _block(BLK_THUMBNAIL, params, png_bytes, compress=False)
+
     BLK_FILE_META    = 0
     BLK_SLICER_META  = 2
 
@@ -210,15 +347,17 @@ def _write_bgcode(gcode_text: str, dest) -> int:
     #   FileMetadata → PrinterMetadata → [Thumbnails] → PrintMetadata → SlicerMetadata → GCode+
     # GCode MUST be last; libbgcode convert() seeks back past GCode to find
     # PrintMetadata and SlicerMetadata, so they must precede the GCode blocks.
-    file_hdr  = MAGIC + struct.pack("<IH", VERSION, CKSUM_CRC32)
-    gcode_blk = _block(BLK_GCODE,
-                       params=struct.pack("<H", ENC_RAW),
-                       data=gcode_text.encode("utf-8"),
-                       compress=True)
+    file_hdr   = MAGIC + struct.pack("<IH", VERSION, CKSUM_CRC32)
+    gcode_blk  = _block(BLK_GCODE,
+                        params=struct.pack("<H", ENC_RAW),
+                        data=gcode_text.encode("utf-8"),
+                        compress=True)
+    thumb_data = b"".join(_thumb_block(tw, th, png) for tw, th, png in thumbnails)
     content = (
         file_hdr
         + _meta_block(BLK_FILE_META,    {"Producer": "prusa_pa_calibration"})
         + _meta_block(BLK_PRINTER_META)
+        + thumb_data
         + _meta_block(BLK_PRINT_META,   {"generator": "prusa_pa_calibration"})
         + _meta_block(BLK_SLICER_META)
         + gcode_blk
@@ -938,16 +1077,21 @@ def resolve_presets(args, script_dir: str) -> tuple:
     return ppreset, fpreset, start_tmpl, end_tmpl
 
 
-def handle_output(gcode: str, args, default_stem: str) -> None:
-    """Write G-code to file/stdout and handle PrusaLink/PrusaConnect uploads."""
+def handle_output(gcode: str, args, default_stem: str, thumbnails=()) -> None:
+    """Write G-code to file/stdout and handle PrusaLink/PrusaConnect uploads.
+
+    thumbnails — optional sequence of (width, height, png_bytes) tuples passed
+                 to _write_bgcode() when producing binary output.  Plain text
+                 output ignores this parameter.
+    """
     if args.binary:
         if args.output:
-            n = _write_bgcode(gcode, args.output)
+            n = _write_bgcode(gcode, args.output, thumbnails=thumbnails)
             lines = gcode.count("\n")
             print(f"Wrote {lines} G-code lines as bgcode ({n:,} bytes) → {args.output}",
                   file=sys.stderr)
         else:
-            _write_bgcode(gcode, sys.stdout.buffer)
+            _write_bgcode(gcode, sys.stdout.buffer, thumbnails=thumbnails)
     else:
         if args.output:
             with open(args.output, "w") as f:
@@ -963,7 +1107,7 @@ def handle_output(gcode: str, args, default_stem: str) -> None:
         # output format — PrusaLink/PrusaConnect accept bgcode natively and
         # the compressed payload avoids HTTP 413 errors on large files.
         buf = io.BytesIO()
-        _write_bgcode(gcode, buf)
+        _write_bgcode(gcode, buf, thumbnails=thumbnails)
         return buf.getvalue()
 
     def _remote_name(service: str) -> str:
