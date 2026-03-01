@@ -271,6 +271,30 @@ def _thumbnail_tower(w: int, h: int) -> bytes:
     return r.to_png()
 
 
+def _thumbnails_to_gcode_comments(thumbnails) -> str:
+    """Encode thumbnails as PrusaSlicer-style thumbnail comment blocks.
+
+    Returns a string (possibly empty) to prepend to the ASCII G-code.
+    Format (understood by PrusaSlicer, OrcaSlicer, Bambu Studio):
+
+        ; thumbnail begin WxH <base64_char_count>
+        ; <base64 data, up to 78 chars per line>
+        ; thumbnail end
+
+    The block is repeated for each (width, height, png_bytes) tuple.
+    """
+    import base64
+    out: list[str] = []
+    for w, h, png in thumbnails:
+        b64 = base64.b64encode(png).decode()
+        out.append(f"; thumbnail begin {w}x{h} {len(b64)}")
+        for i in range(0, len(b64), 78):
+            out.append(f"; {b64[i : i + 78]}")
+        out.append("; thumbnail end")
+        out.append(";")
+    return "\n".join(out) + "\n" if out else ""
+
+
 def _write_bgcode(gcode_text: str, dest, thumbnails=()) -> int:
     """
     Write gcode_text as a Prusa binary G-code v1 (.bgcode) file.
@@ -1093,14 +1117,18 @@ def handle_output(gcode: str, args, default_stem: str, thumbnails=()) -> None:
         else:
             _write_bgcode(gcode, sys.stdout.buffer, thumbnails=thumbnails)
     else:
+        # ASCII output: prepend PrusaSlicer-style base64 thumbnail comment blocks
+        # so slicer previews (OrcaSlicer, PrusaSlicer, etc.) can show the image.
+        thumb_hdr = _thumbnails_to_gcode_comments(thumbnails)
+        out_gcode = thumb_hdr + gcode
         if args.output:
             with open(args.output, "w") as f:
-                f.write(gcode)
-            lines = gcode.count("\n")
-            print(f"Wrote {lines} lines ({len(gcode):,} bytes) → {args.output}",
+                f.write(out_gcode)
+            lines = out_gcode.count("\n")
+            print(f"Wrote {lines} lines ({len(out_gcode):,} bytes) → {args.output}",
                   file=sys.stderr)
         else:
-            sys.stdout.write(gcode)
+            sys.stdout.write(out_gcode)
 
     def _upload_data() -> bytes:
         # Always upload as bgcode (DEFLATE-compressed) regardless of local
