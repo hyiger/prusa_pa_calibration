@@ -82,8 +82,14 @@ def _post_form(url: str, fields: dict) -> dict:
     body = urllib.parse.urlencode(fields).encode()
     req  = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        print(f"ERROR: HTTP {e.code} from {url}", file=sys.stderr)
+        print(f"       {detail}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _get_json(url: str, access_token: str) -> object:
@@ -128,32 +134,40 @@ def _browser_login() -> dict:
     auth_url = f"{_AUTH_URL}?{params}"
 
     print("Opening browser for Prusa login…")
-    print("  (If it doesn't open automatically, visit the URL below.)\n")
+    print("  (If it doesn't open, manually visit:)")
+    print(f"  {auth_url}\n")
     webbrowser.open(auth_url)
 
-    print("After logging in, the browser will try to open a 'prusaslicer://'")
-    print("URL and show an error — that's expected.")
-    print()
-    print("Copy the full URL from the browser address bar and paste it here.")
-    print("  It looks like:  prusaslicer://login?code=XXXXXXXXXX")
-    print()
+    print("Steps:")
+    print("  1. Log in to your Prusa account (including any 2FA prompt)")
+    print("  2. The browser will redirect to a 'prusaslicer://' URL and show")
+    print("     an error page — that is expected and normal")
+    print("  3. Copy the FULL URL from the address bar — it looks like:")
+    print("       prusaslicer://login?code=XXXXXXXXXX")
+    print("  4. Paste it below\n")
 
     while True:
         try:
-            raw = input("Paste URL (or just the code): ").strip()
+            raw = input("Paste the prusaslicer://login?code=… URL here: ").strip()
         except EOFError:
             print("\nAborted.", file=sys.stderr)
             sys.exit(1)
+
+        if raw.startswith("https://account.prusa3d.com"):
+            print("That's the login page URL — you need the redirect URL.")
+            print("Complete the login, then copy the 'prusaslicer://login?code=…'")
+            print("URL from the address bar.\n")
+            continue
 
         if raw.startswith("prusaslicer://"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(raw).query)
             code = qs.get("code", [""])[0]
         else:
-            code = raw  # user pasted just the bare code value
+            code = raw  # bare code value
 
         if code:
             break
-        print("Couldn't find a 'code' parameter — please try again.")
+        print("Couldn't find a 'code' in that URL — please try again.\n")
 
     print("Exchanging code for tokens…")
     return _exchange_code(code, verifier)
