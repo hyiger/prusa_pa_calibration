@@ -2,9 +2,16 @@
 """
 temp_tower.py — Temperature tower G-code generator for Prusa printers
 
-Generates a tall rectangular tower split into horizontal segments, each printed
-at a different hotend temperature.  Print the tower, then examine the surface
-quality and bridging at each segment to find your ideal printing temperature.
+Generates a multi-segment temperature tower inspired by the "Advanced temp tower"
+design by Tronnic.  Each temperature segment features:
+
+  - Short overhang wall  (overhang quality test, default 45°)
+  - Long overhang wall   (overhang quality test, default 35°)
+  - Stringing-test cones in the open bridge gap
+  - Bridging slab spanning the gap at the top of each segment
+
+The base layer provides a solid foundation.  Temperature labels (7-segment
+digits) are printed to the right of each segment start.
 
 Usage:
     # PLA: scan 215 → 185 °C in 5 °C steps (default)
@@ -16,8 +23,8 @@ Usage:
     # ABS on MK4S with custom range
     python3 temp_tower.py --printer MK4S --filament ABS --temp-start 250 --temp-end 220 -o abs_tower.gcode
 
-    # Finer steps
-    python3 temp_tower.py --temp-start 220 --temp-end 200 --temp-step 2 -o fine_tower.gcode
+    # Custom geometry
+    python3 temp_tower.py --module-height 8 --bridge-length 25 -o custom_tower.gcode
 
 Template variables available in --start-gcode / --end-gcode files:
     {bed_temp}      Bed temperature (°C)
@@ -61,18 +68,23 @@ class Config(CommonConfig):
     temp_end:   int = 185    # °C — top segment temperature (may be higher or lower)
     temp_step:  float = 5.0  # °C per segment (always positive)
 
-    # Tower geometry
-    segment_height: float = 5.0   # mm — height of each temperature segment
-    tower_width:    float = 20.0  # mm — X footprint of the tower body
-    tower_depth:    float = 20.0  # mm — Y footprint of the tower body
-    wall_count:     int   = 2     # perimeter walls per layer
-    label_tab:      bool  = True  # draw temperature label at each segment transition
+    # Module geometry (one module = one temperature segment)
+    module_height: float = 10.0   # mm — height of each temperature segment
+    module_depth:  float = 10.0   # mm — Y footprint (depth into the page)
+    bridge_length: float = 30.0   # mm — bridge/stringing-test gap between walls
+    bridge_thick:  float = 1.0    # mm — thickness of the bridge slab at segment top
+    short_angle:   float = 45.0   # degrees — short-side overhang angle
+    long_angle:    float = 35.0   # degrees — long-side overhang angle
+    n_cones:       int   = 2      # stringing-test cones in the bridge gap
+    base_thick:    float = 1.0    # mm — solid base slab thickness
+
+    label_tab:     bool  = True   # print per-segment temperature labels
 
 
 # ── Temperature tower generator ────────────────────────────────────────────────
 
 class TowerGenerator(BaseGenerator):
-    """Generates a temperature tower calibration print."""
+    """Generates an advanced temperature tower calibration print."""
 
     def __init__(self, cfg: Config,
                  start_template: Optional[str] = None,
@@ -89,7 +101,7 @@ class TowerGenerator(BaseGenerator):
         # ── segment planning ───────────────────────────────────────────────────
         direction     = 1 if c.temp_end >= c.temp_start else -1
         span          = abs(c.temp_end - c.temp_start)
-        n_full_steps  = int(span / c.temp_step)   # steps that stay within range
+        n_full_steps  = int(span / c.temp_step)
         temps         = [round(c.temp_start + i * direction * c.temp_step)
                          for i in range(n_full_steps + 1)]
         # Always land exactly on temp_end; warn when span is not a clean multiple
@@ -104,24 +116,41 @@ class TowerGenerator(BaseGenerator):
             temps.append(c.temp_end)
         n_segs = len(temps)
 
-        # Layers per segment (first-layer height counts as one layer)
-        layers_per_seg = max(1, round(c.segment_height / c.layer_height))
-        total_layers   = n_segs * layers_per_seg   # includes first layer (idx 0)
+        # ── layer counts ───────────────────────────────────────────────────────
+        n_base_layers  = max(1, round(c.base_thick   / c.layer_height))
+        layers_per_seg = max(1, round(c.module_height / c.layer_height))
+        total_layers   = n_base_layers + n_segs * layers_per_seg
+        max_layer_z    = _r(c.first_layer_height + (total_layers - 1) * c.layer_height, _Z)
 
-        max_layer_z = _r(
-            c.first_layer_height + (total_layers - 1) * c.layer_height, _Z
-        )
+        # ── geometry constants ─────────────────────────────────────────────────
+        tan_short = math.tan(math.radians(c.short_angle))
+        tan_long  = math.tan(math.radians(c.long_angle))
+
+        # Maximum cross-section widths (at the top of each module)
+        max_short_w = 5.0 + c.module_height / tan_short
+        max_long_w  = 20.0 + c.module_height / tan_long
+
+        # Cone geometry (matches SCAD defaults scaled to module_depth)
+        cone_h      = c.module_height * 0.5
+        start_d     = c.module_depth * 0.3   # base diameter of first cone
+        end_d       = c.module_depth * 0.5   # base diameter of last cone
+        if c.n_cones > 1:
+            d_step      = (end_d - start_d) / (c.n_cones - 1)
+            x_step_cone = (c.bridge_length - 10.0) / (c.n_cones - 1)
+        else:
+            d_step      = 0.0
+            x_step_cone = 0.0
 
         # ── layout ────────────────────────────────────────────────────────────
         if c.anchor == "none":
             margin = 2.0
         else:
             spacing_a = lw_a - c.first_layer_height * (1.0 - math.pi / 4.0)
-            margin    = c.anchor_perimeters * spacing_a + 1.0  # anchor + 1 mm gap
+            margin    = c.anchor_perimeters * spacing_a + 1.0
 
-        tower_area_w = c.tower_width + 2.0 * margin   # anchor footprint (no label)
+        # Tower body spans: short_side (max_short_w) + bridge_gap + long_side (max_long_w)
+        tower_w = max_short_w + c.bridge_length + max_long_w
 
-        # Label tab: 7-segment temperature digits printed to the right of the tower
         if c.label_tab:
             max_chars = len(str(max(abs(c.temp_start), abs(c.temp_end))))
             tab_w     = max_chars * self._digit_width() + self._SEG_GAP
@@ -129,40 +158,45 @@ class TowerGenerator(BaseGenerator):
         else:
             tab_w = label_gap = 0.0
 
-        full_w = tower_area_w + label_gap + tab_w
-        full_h = c.tower_depth + 2.0 * margin
+        anchor_w = tower_w + 2.0 * margin          # anchor wraps tower body
+        full_w   = anchor_w + label_gap + tab_w    # total X footprint
+        full_h   = c.module_depth + 2.0 * margin   # total Y footprint
 
-        # Warn if tower exceeds bed
+        # Overflow warnings
         if full_w > c.bed_x or full_h > c.bed_y:
             print(
-                f"WARNING: tower footprint {full_w:.1f}×{full_h:.1f} mm "
+                f"WARNING: footprint {full_w:.1f}×{full_h:.1f} mm "
                 f"exceeds bed {c.bed_x}×{c.bed_y} mm.",
                 file=sys.stderr,
             )
-
-        tower_height_mm = _r(
-            c.first_layer_height + (total_layers - 1) * c.layer_height, _Z
-        )
-        if tower_height_mm > c.max_z:
+        if max_layer_z > c.max_z:
             print(
-                f"WARNING: tower height {tower_height_mm} mm exceeds max Z {c.max_z} mm.",
+                f"WARNING: tower height {max_layer_z} mm exceeds max Z {c.max_z} mm.",
                 file=sys.stderr,
             )
 
         # Centre on bed
-        orig_x   = (c.bed_x - full_w) / 2.0
-        orig_y   = (c.bed_y - full_h) / 2.0
-        tower_x0 = orig_x + margin
-        tower_y0 = orig_y + margin
-        tower_x1 = tower_x0 + c.tower_width
-        tower_y1 = tower_y0 + c.tower_depth
+        orig_x = (c.bed_x - full_w) / 2.0
+        orig_y = (c.bed_y - full_h) / 2.0
 
-        # Label position: right of tower body, vertically centred in tower depth
+        # Absolute Y span
+        y0       = orig_y + margin
+        y1       = y0 + c.module_depth
+        cy_cone  = (y0 + y1) / 2.0   # cone Y centre
+
+        # Absolute X anchors (constant throughout print)
+        # short_x1 = right edge of the short-side wall (fixed reference)
+        # At local_z=0: short side is 5 mm wide, left edge = short_x1 - 5
+        # At local_z=h: short side is (5 + h/tan_short) mm wide, growing leftward
+        short_x1 = orig_x + margin + max_short_w
+        long_x0  = short_x1 + c.bridge_length   # left edge of long-side wall
+
+        # Label position: to the right of the widest long-side extent
         if c.label_tab:
-            label_x = tower_x1 + label_gap
-            label_y = tower_y0 + (c.tower_depth - self._SEG_LEN * 2.0) / 2.0
+            label_x = long_x0 + max_long_w + label_gap
+            label_y = y0 + (c.module_depth - self._SEG_LEN * 2.0) / 2.0
         else:
-            label_x = label_y = 0.0   # unused
+            label_x = label_y = 0.0
 
         tmpl_vars = self._base_tmpl_vars(max_layer_z, orig_x, orig_y, full_w, full_h)
 
@@ -175,14 +209,18 @@ class TowerGenerator(BaseGenerator):
             f"step {c.temp_step} °C  ({n_segs} segments)"
         )
         self._comment(
-            f"Segment height: {c.segment_height} mm  "
-            f"({layers_per_seg} layers @ {c.layer_height} mm)"
+            f"Module: {c.module_height} mm tall  {c.module_depth} mm deep  "
+            f"bridge {c.bridge_length} mm  ({layers_per_seg} layers/seg @ {c.layer_height} mm)"
         )
-        self._comment(f"Tower: {c.tower_width}×{c.tower_depth} mm footprint  "
-                      f"total height {tower_height_mm} mm")
+        self._comment(
+            f"Walls: short {c.short_angle}°  long {c.long_angle}°  "
+            f"{c.n_cones} stringing cone(s)  bridge slab {c.bridge_thick} mm"
+        )
         self._comment(f"Nozzle: {c.nozzle_dia} mm   Filament: {c.filament_dia} mm")
-        self._comment(f"Bed: {c.bed_temp} °C   "
-                      f"Retraction: {c.retract_dist} mm @ {c.retract_speed} mm/s")
+        self._comment(
+            f"Bed: {c.bed_temp} °C   "
+            f"Retraction: {c.retract_dist} mm @ {c.retract_speed} mm/s"
+        )
         self._blank()
 
         # ── start G-code ───────────────────────────────────────────────────────
@@ -196,13 +234,9 @@ class TowerGenerator(BaseGenerator):
         self._emit(f"M106 S{fan0}  ; part-cooling fan — first layer ({c.first_layer_fan} %)")
 
         # ── layer loop ─────────────────────────────────────────────────────────
-        wall_spacing = lw - c.layer_height * (1.0 - math.pi / 4.0)
-        wall_spacing_fl = lw - c.first_layer_height * (1.0 - math.pi / 4.0)
-
         for layer_idx in range(total_layers):
-            seg_idx  = layer_idx // layers_per_seg
-            temp     = temps[seg_idx]
             is_first = layer_idx == 0
+            is_base  = layer_idx < n_base_layers
 
             if is_first:
                 lh    = c.first_layer_height
@@ -213,16 +247,29 @@ class TowerGenerator(BaseGenerator):
                 speed = c.print_speed
                 z     = _r(c.first_layer_height + layer_idx * c.layer_height, _Z)
 
+            # Determine segment index and local Z within segment
+            if is_base:
+                temp         = temps[0]
+                seg_idx      = 0
+                layer_in_seg = 0
+                local_z      = 0.0   # base: use bottom cross-section geometry
+            else:
+                seg_layer    = layer_idx - n_base_layers
+                seg_idx      = min(seg_layer // layers_per_seg, n_segs - 1)
+                layer_in_seg = seg_layer % layers_per_seg
+                local_z      = _r(layer_in_seg * c.layer_height, _Z)
+                temp         = temps[seg_idx]
+
             self._comment(
                 f"─── LAYER {layer_idx + 1}  Z={_r(z, _Z)}  "
-                f"seg {seg_idx}  {temp} °C {'─' * 20}"
+                f"{'BASE' if is_base else f'seg {seg_idx}  {temp} °C'}  {'─' * 20}"
             )
 
+            # Z movement and temperature
             if is_first:
                 self._emit(f"G0 Z{_r(z, _Z)} F{int(c.travel_speed * 60)}")
                 st.z = _r(z, _Z)
-                # Wait for first segment temperature before printing
-                self._emit(f"M109 S{temp}  ; wait for {temp} °C (segment 0)")
+                self._emit(f"M109 S{temp}  ; wait for {temp} °C")
                 if c.show_lcd:
                     self._emit(f"M117 Temp: {temp}C")
             else:
@@ -233,50 +280,80 @@ class TowerGenerator(BaseGenerator):
                 self._unretract()
 
                 if layer_idx == 1:
-                    # Activate part-cooling fan from layer 2
                     fan = int(c.fan_speed / 100.0 * 255)
-                    self._emit(f"M106 S{fan}  ; part-cooling fan from layer 2 ({c.fan_speed} %)")
+                    self._emit(
+                        f"M106 S{fan}  ; part-cooling fan from layer 2 ({c.fan_speed} %)"
+                    )
 
-                # Emit temperature change at the first layer of each new segment
-                if layer_idx % layers_per_seg == 0:
+                # Emit temperature change at first layer of each new segment
+                # (seg 0 already handled at layer_idx==0; skip base layers)
+                if not is_base and layer_in_seg == 0 and seg_idx > 0:
                     self._emit(f"M104 S{temp}  ; segment {seg_idx}: {temp} °C")
                     if c.show_lcd:
                         self._emit(f"M117 Temp: {temp}C")
 
-            # Anchor on first layer only
+            # Anchor: first overall layer only, around tower body footprint
             if is_first:
                 if c.anchor == "frame":
                     self._comment("Anchor frame")
                     self._anchor_frame(
-                        orig_x, orig_y, tower_area_w, full_h,
+                        orig_x, orig_y, anchor_w, full_h,
                         lh, lw_a, c.anchor_perimeters, speed,
                     )
                 elif c.anchor == "layer":
                     self._comment("Anchor layer (filled)")
-                    self._anchor_layer(orig_x, orig_y, tower_area_w, full_h, lh, lw_a, speed)
+                    self._anchor_layer(orig_x, orig_y, anchor_w, full_h, lh, lw_a, speed)
 
-            # Tower walls: wall_count concentric rectangles
-            ws = wall_spacing_fl if is_first else wall_spacing
-            for w in range(c.wall_count):
-                off = w * ws
-                wx0 = tower_x0 + off
-                wy0 = tower_y0 + off
-                wx1 = tower_x1 - off
-                wy1 = tower_y1 - off
-                if wx0 >= wx1 or wy0 >= wy1:
-                    break
-                self._perimeter(wx0, wy0, wx1, wy1, speed, lh, lw)
+            # ── shapes ────────────────────────────────────────────────────────
+            if is_base:
+                # Solid base slab: full X span of tower at local_z=0 cross-section
+                # short side at z=0 is 5 mm wide; long side is 20 mm wide
+                base_x0 = short_x1 - 5.0
+                base_w  = 5.0 + c.bridge_length + 20.0
+                self._anchor_layer(base_x0, y0, base_w, c.module_depth, lh, lw, speed)
+                # Label tab column base (free-standing pillar, supported by anchor)
+                if c.label_tab:
+                    self._anchor_layer(
+                        label_x, label_y, tab_w, self._SEG_LEN * 2.0, lh, lw, speed
+                    )
 
-            # Label tab: solid fill every layer for support; digits at segment starts
-            if c.label_tab:
-                tab_h = self._SEG_LEN * 2.0
-                if layer_idx % layers_per_seg == 0:
-                    # Segment transition: digit lines replace the fill on this layer
-                    self._comment(f"Label: {temp} °C")
-                    self._draw_number(label_x, label_y, float(temp), lh, lw, speed)
-                else:
-                    # All other layers: raster fill keeps the column structurally sound
-                    self._anchor_layer(label_x, label_y, tab_w, tab_h, lh, lw, speed)
+            else:
+                # Per-layer widths (walls grow outward as local_z increases)
+                sx0 = _r(short_x1 - (5.0 + local_z / tan_short), _XY)
+                lx1 = _r(long_x0  + 20.0 + local_z / tan_long,   _XY)
+
+                # Short overhang wall — solid filled rectangle, growing leftward
+                short_w = short_x1 - sx0
+                if short_w > lw:
+                    self._anchor_layer(sx0, y0, short_w, c.module_depth, lh, lw, speed)
+
+                # Long overhang wall — solid filled rectangle, growing rightward
+                long_w = lx1 - long_x0
+                if long_w > lw:
+                    self._anchor_layer(long_x0, y0, long_w, c.module_depth, lh, lw, speed)
+
+                # Stringing-test cones (in bridge gap, lower half of each segment)
+                if local_z < cone_h:
+                    for cone_c in range(c.n_cones):
+                        r_base  = (start_d + cone_c * d_step) / 2.0
+                        r       = r_base * (1.0 - local_z / cone_h)
+                        cx_cone = _r(short_x1 + 5.0 + cone_c * x_step_cone, _XY)
+                        self._circle(cx_cone, cy_cone, r, speed, lh, lw)
+
+                # Bridge slab — solid fill spanning the gap at the top of each segment
+                if local_z >= c.module_height - c.bridge_thick - 1e-6:
+                    self._anchor_layer(
+                        short_x1, y0, c.bridge_length, c.module_depth, lh, lw, speed
+                    )
+
+                # Label tab: 7-segment digits at segment start, solid fill otherwise
+                if c.label_tab:
+                    tab_h = self._SEG_LEN * 2.0
+                    if layer_in_seg == 0:
+                        self._comment(f"Label: {temp} °C")
+                        self._draw_number(label_x, label_y, float(temp), lh, lw, speed)
+                    else:
+                        self._anchor_layer(label_x, label_y, tab_w, tab_h, lh, lw, speed)
 
         # ── end G-code ─────────────────────────────────────────────────────────
         self._blank()
@@ -284,7 +361,7 @@ class TowerGenerator(BaseGenerator):
         for line in _render(self._end_tmpl, tmpl_vars).splitlines():
             self._emit(line)
         self._blank()
-        self._comment("Done! Examine each segment for surface quality.")
+        self._comment("Done!  Examine each segment for overhang / stringing / bridging quality.")
         self._comment(f"Bottom segment = {temps[0]} °C, top = {temps[-1]} °C.")
 
         return "\n".join(self._buf) + "\n"
@@ -307,13 +384,12 @@ def _positive_float(value: str) -> float:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Generate temperature tower calibration G-code for Prusa printers",
+        description="Generate advanced temperature tower G-code for Prusa printers",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog=(
             "Workflow:\n"
             "  1. Run a wide scan first (default: 215→185 °C, 5 °C steps).\n"
-            "  2. Examine each segment under good lighting.\n"
-            "     Look for: stringing, bridging quality, layer adhesion, surface smoothness.\n"
+            "  2. Examine each segment: overhang quality, stringing, bridging.\n"
             "  3. Identify the best-looking segment and use that temperature.\n"
             "  4. Optionally run a fine scan (--temp-step 2) centred on your winner.\n"
             "\n"
@@ -336,14 +412,22 @@ def _build_parser() -> argparse.ArgumentParser:
                         "(default: temp-start − 30)")
     g.add_argument("--temp-step",  type=_positive_float, default=5.0, metavar="°C",
                    help="Temperature change per segment (always positive)")
-    g.add_argument("--segment-height", type=float, default=5.0, metavar="mm",
+    g.add_argument("--module-height", type=float, default=10.0, metavar="mm",
                    help="Height of each temperature segment")
-    g.add_argument("--tower-width",    type=float, default=20.0, metavar="mm",
-                   help="Tower footprint width (X)")
-    g.add_argument("--tower-depth",    type=float, default=20.0, metavar="mm",
-                   help="Tower footprint depth (Y)")
-    g.add_argument("--wall-count",     type=int,   default=2,    metavar="N",
-                   help="Number of perimeter walls per layer")
+    g.add_argument("--module-depth",  type=float, default=10.0, metavar="mm",
+                   help="Depth (Y footprint) of each segment")
+    g.add_argument("--bridge-length", type=float, default=30.0, metavar="mm",
+                   help="Length of bridge / stringing-test area between walls")
+    g.add_argument("--bridge-thick",  type=float, default=1.0,  metavar="mm",
+                   help="Thickness of bridge slab printed at top of each segment")
+    g.add_argument("--short-angle",   type=float, default=45.0, metavar="deg",
+                   help="Overhang angle of short-side wall")
+    g.add_argument("--long-angle",    type=float, default=35.0, metavar="deg",
+                   help="Overhang angle of long-side wall")
+    g.add_argument("--n-cones",       type=int,   default=2,    metavar="N",
+                   help="Number of stringing-test cones in bridge gap")
+    g.add_argument("--base-thick",    type=float, default=1.0,  metavar="mm",
+                   help="Thickness of solid base slab")
     g.add_argument("--no-label-tab", dest="label_tab", action="store_false",
                    help="Disable per-segment temperature labels (default: enabled)")
 
@@ -381,7 +465,14 @@ def main():
         temp_step          = args.temp_step,
         first_layer_height = args.first_layer_height,
         layer_height       = args.layer_height,
-        segment_height     = args.segment_height,
+        module_height      = args.module_height,
+        module_depth       = args.module_depth,
+        bridge_length      = args.bridge_length,
+        bridge_thick       = args.bridge_thick,
+        short_angle        = args.short_angle,
+        long_angle         = args.long_angle,
+        n_cones            = args.n_cones,
+        base_thick         = args.base_thick,
         print_speed        = args.print_speed,
         first_layer_speed  = args.first_layer_speed,
         travel_speed       = args.travel_speed,
@@ -391,9 +482,6 @@ def main():
         retract_speed      = args.retract_speed,
         unretract_speed    = args.unretract_speed,
         zhop               = args.zhop,
-        tower_width        = args.tower_width,
-        tower_depth        = args.tower_depth,
-        wall_count         = args.wall_count,
         label_tab          = args.label_tab,
         anchor             = args.anchor,
         anchor_perimeters  = args.anchor_perimeters,

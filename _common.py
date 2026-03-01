@@ -462,6 +462,21 @@ class BaseGenerator:
             y += 2.0 * spacing
             lr = not lr
 
+    def _circle(self, cx: float, cy: float, r: float, speed: float, lh: float, lw: float):
+        """Draw a single closed circular perimeter of radius r centred at (cx, cy)."""
+        if r < lw * 0.5:
+            return
+        n_segs = max(12, int(2 * math.pi * r / lw))
+        pts = [
+            (_r(cx + r * math.cos(2 * math.pi * i / n_segs), _XY),
+             _r(cy + r * math.sin(2 * math.pi * i / n_segs), _XY))
+            for i in range(n_segs)
+        ]
+        self._travel(pts[0][0], pts[0][1])
+        for x, y in pts[1:]:
+            self._line(x, y, speed, lh, lw)
+        self._line(pts[0][0], pts[0][1], speed, lh, lw)  # close the loop
+
     # ── 7-segment number rendering ─────────────────────────────────────────────
 
     _SEGS: dict[str, tuple] = {
