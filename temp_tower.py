@@ -95,135 +95,6 @@ class TowerGenerator(BaseGenerator):
                  end_template:   Optional[str] = None):
         super().__init__(cfg, start_template, end_template)
 
-    # ── inset face-text rendering ──────────────────────────────────────────────
-
-    def _digit_gaps(self, temp: int, seg_len: float, z_base: float,
-                    local_z: float, char_x0: float, char_adv: float,
-                    lh: float, lw: float) -> list:
-        """
-        Return sorted, merged [(x0, x1)] gap intervals for this layer.
-
-        Gaps are the X positions where the front-face perimeter should NOT be
-        printed — i.e. the positions of each active 7-segment bar at local_z.
-        Leaving these positions open creates inset (engraved) digit strokes.
-
-        Horizontal bars are active for ±lh around their Z level (2 layers).
-        Vertical bar notches are active between adjacent horizontal bars.
-        """
-        SL    = seg_len
-        h_tol = lh * 3.0          # horizontal bar: active over ±3 layers (~0.6 mm)
-        v_tol = lh * 3.0          # exclusion zone near horizontal bar levels
-        nub   = lw * 4.0          # notch width for vertical bars (must be < SL/2)
-
-        gaps: list = []
-        cx = char_x0
-        for ch in str(temp):
-            if ch not in self._SEGS:
-                cx += char_adv
-                continue
-            t, tr, br, bot, bl, tl, mid = self._SEGS[ch]
-            z_bot = z_base
-            z_mid = z_base + SL
-            z_top = z_base + 2 * SL
-
-            # Horizontal bars (full-width gap at their Z level)
-            if bot and abs(local_z - z_bot) < h_tol:
-                gaps.append((cx, cx + SL))
-            if mid and abs(local_z - z_mid) < h_tol:
-                gaps.append((cx, cx + SL))
-            if t   and abs(local_z - z_top) < h_tol:
-                gaps.append((cx, cx + SL))
-
-            # Vertical bar notches (narrow gap on the appropriate X edge)
-            if br and z_bot + v_tol < local_z < z_mid - v_tol:
-                gaps.append((_r(cx + SL - nub, _XY), cx + SL))
-            if tr and z_mid + v_tol < local_z < z_top - v_tol:
-                gaps.append((_r(cx + SL - nub, _XY), cx + SL))
-            if bl and z_bot + v_tol < local_z < z_mid - v_tol:
-                gaps.append((cx, _r(cx + nub, _XY)))
-            if tl and z_mid + v_tol < local_z < z_top - v_tol:
-                gaps.append((cx, _r(cx + nub, _XY)))
-
-            cx += char_adv
-
-        # Sort and merge overlapping intervals
-        gaps.sort()
-        merged: list = []
-        for g0, g1 in gaps:
-            if merged and g0 < merged[-1][1] + 1e-4:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], g1))
-            else:
-                merged.append((g0, g1))
-        return merged
-
-    def _wall_layer_inset(self, x0: float, y0: float, width: float, depth: float,
-                          gaps: list, lh: float, lw: float, speed: float,
-                          n_perims: int = 2):
-        """
-        Solid rectangular wall layer with inset gaps on the front face (Y = y0+depth).
-
-        Identical to _anchor_layer when gaps is empty.  When gaps are supplied
-        all n_perims perimeter passes leave those X intervals unprinted on the
-        front face, creating ~n_perims*spacing-deep grooves visible from the
-        front.
-
-        gaps:     sorted list of (x_start, x_end) intervals to omit.
-        n_perims: number of perimeter loops (default 2; use 5 for deep inset text).
-        """
-        x1 = x0 + width
-        y1 = y0 + depth
-        spacing = lw - lh * (1.0 - math.pi / 4.0)
-
-        for i in range(n_perims):
-            off  = i * spacing
-            bx0  = x0 + off
-            by0  = y0 + off
-            bx1  = x1 - off
-            by1  = y1 - off
-
-            # back + right faces (always solid)
-            self._travel(bx0, by0)
-            self._line(bx1, by0, speed, lh, lw)
-            self._line(bx1, by1, speed, lh, lw)
-
-            # front face right-to-left, with gaps clipped to [bx0, bx1]
-            clipped = sorted(
-                [(max(bx0, g0), min(bx1, g1))
-                 for g0, g1 in gaps
-                 if g0 < bx1 - 1e-4 and g1 > bx0 + 1e-4
-                 and min(bx1, g1) - max(bx0, g0) > 1e-4],
-                reverse=True,
-            )
-            cx = bx1
-            for g0, g1 in clipped:
-                if cx > g1 + 1e-4:
-                    self._line(g1, by1, speed, lh, lw)
-                cx = g0
-                if cx > bx0 + 1e-4:
-                    self._travel(cx, by1)
-            if cx > bx0 + 1e-4:
-                self._line(bx0, by1, speed, lh, lw)
-
-            # left face
-            self._line(bx0, by0, speed, lh, lw)
-
-        # solid horizontal fill (spacing increment = full coverage)
-        ix0 = x0 + n_perims * spacing
-        iy0 = y0 + n_perims * spacing
-        ix1 = x1 - n_perims * spacing
-        iy1 = y1 - n_perims * spacing
-        y   = iy0
-        lr  = True
-        while y <= iy1 + 1e-6:
-            if lr:
-                self._travel(ix0, y)
-                self._line(ix1, y, speed, lh, lw)
-            else:
-                self._travel(ix1, y)
-                self._line(ix0, y, speed, lh, lw)
-            y  += spacing
-            lr  = not lr
-
     def generate(self) -> str:
         c  = self.cfg
         st = self._st
@@ -273,13 +144,6 @@ class TowerGenerator(BaseGenerator):
         else:
             d_step      = 0.0
             x_step_cone = 0.0
-
-        # Face-text geometry: digits span 90 % of module_height, centred vertically.
-        # seg_len = half the digit height (bar length); char_adv = char width + gap.
-        # nub < seg_len/2 is enforced in _digit_gaps so left/right bars don't merge.
-        seg_len    = c.module_height * 0.45         # bar length (digit height = 2*seg_len)
-        z_base_txt = (c.module_height - 2.0 * seg_len) / 2.0   # bottom of glyph column
-        char_adv   = seg_len * 1.2                 # character advance (bar + 20 % gap)
 
         # ── layout ────────────────────────────────────────────────────────────
         if c.anchor == "none":
@@ -387,6 +251,11 @@ class TowerGenerator(BaseGenerator):
                 f"{'BASE' if is_base else f'seg {seg_idx}  {temp} °C'}  {'─' * 20}"
             )
 
+            # PrusaSlicer layer markers — enable layer-scrubbing in the preview
+            self._emit(f";LAYER_CHANGE")
+            self._emit(f";Z:{_r(z, _Z)}")
+            self._emit(f";HEIGHT:{lh}")
+
             # Z movement and temperature
             if is_first:
                 self._emit(f"G0 Z{_r(z, _Z)} F{int(c.travel_speed * 60)}")
@@ -395,10 +264,12 @@ class TowerGenerator(BaseGenerator):
                 if c.show_lcd:
                     self._emit(f"M117 Temp: {temp}C")
             else:
+                self._emit(f";BEFORE_LAYER_CHANGE")
                 self._retract()
-                self._emit(f"G0 Z{z} F{int(c.travel_speed * 60)}")
-                st.z = z
+                self._emit(f"G0 Z{_r(z, _Z)} F{int(c.travel_speed * 60)}")
+                st.z = _r(z, _Z)
                 st.hopped = False
+                self._emit(f";AFTER_LAYER_CHANGE")
                 self._unretract()
 
                 if layer_idx == 1:
@@ -442,25 +313,10 @@ class TowerGenerator(BaseGenerator):
                 if short_w > lw:
                     self._anchor_layer(sx0, y0, short_w, c.module_depth, lh, lw, speed)
 
-                # Long overhang wall — growing rightward, with optional inset label
+                # Long overhang wall — solid fill
                 long_w = lx1 - long_x0
                 if long_w > lw:
-                    if c.label_tab:
-                        n_chars = len(str(temp))
-                        text_w  = n_chars * char_adv
-                        char_x0 = _r(long_x0 + (20.0 - text_w) / 2.0, _XY)
-                        gaps    = self._digit_gaps(
-                            temp, seg_len, z_base_txt, local_z,
-                            char_x0, char_adv, lh, lw,
-                        )
-                        self._wall_layer_inset(
-                            long_x0, y0, long_w, c.module_depth,
-                            gaps, lh, lw, speed, n_perims=5,
-                        )
-                    else:
-                        self._anchor_layer(
-                            long_x0, y0, long_w, c.module_depth, lh, lw, speed
-                        )
+                    self._anchor_layer(long_x0, y0, long_w, c.module_depth, lh, lw, speed)
 
                 # Stringing-test cones (in bridge gap, lower half of each segment)
                 if local_z < cone_h:
@@ -470,11 +326,20 @@ class TowerGenerator(BaseGenerator):
                         cx_cone = _r(short_x1 + 5.0 + cone_c * x_step_cone, _XY)
                         self._circle(cx_cone, cy_cone, r, speed, lh, lw)
 
-                # Bridge slab — solid fill spanning the gap at the top of each segment
+                # Bridge slab — solid fill spanning the gap at the top of each segment.
+                # Temperature label (7-segment flat digits) is printed on the slab
+                # surface so it is readable in slicer preview (top-down) and builds
+                # up ~bridge_thick mm of raised text on the physical print.
                 if local_z >= c.module_height - c.bridge_thick - 1e-6:
                     self._anchor_layer(
                         short_x1, y0, c.bridge_length, c.module_depth, lh, lw, speed
                     )
+                    if c.label_tab:
+                        n_ch  = len(str(temp))
+                        num_w = n_ch * self._digit_width()
+                        num_x = _r(short_x1 + (c.bridge_length - num_w) / 2.0, _XY)
+                        num_y = _r(y0 + (c.module_depth - self._SEG_LEN * 2.0) / 2.0, _XY)
+                        self._draw_number(num_x, num_y, float(temp), lh, lw, speed)
 
         # ── end G-code ─────────────────────────────────────────────────────────
         self._blank()
