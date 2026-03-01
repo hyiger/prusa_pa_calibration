@@ -6,12 +6,15 @@ Generates a multi-segment temperature tower inspired by the "Advanced temp tower
 design by Tronnic.  Each temperature segment features:
 
   - Short overhang wall  (overhang quality test, default 45°)
-  - Long overhang wall   (overhang quality test, default 35°)
+  - Long overhang wall   (overhang quality test, default 35°), with the
+    temperature number rendered on its front face via layer cross-sections
   - Stringing-test cones in the open bridge gap
   - Bridging slab spanning the gap at the top of each segment
 
-The base layer provides a solid foundation.  Temperature labels (7-segment
-digits) are printed to the right of each segment start.
+The temperature label is embedded in the long-side wall's front face using
+7-segment digit cross-sections printed layer by layer:
+  - Horizontal bars → one extrusion line at the exact Z level
+  - Vertical bars   → tiny horizontal nubs at each intermediate layer
 
 Usage:
     # PLA: scan 215 → 185 °C in 5 °C steps (default)
@@ -78,7 +81,8 @@ class Config(CommonConfig):
     n_cones:       int   = 2      # stringing-test cones in the bridge gap
     base_thick:    float = 1.0    # mm — solid base slab thickness
 
-    label_tab:     bool  = True   # print per-segment temperature labels
+    # Face text: 7-segment temperature number on the front face of the long wall
+    label_tab:     bool  = True   # embed temperature label in the long-wall face
 
 
 # ── Temperature tower generator ────────────────────────────────────────────────
@@ -90,6 +94,79 @@ class TowerGenerator(BaseGenerator):
                  start_template: Optional[str] = None,
                  end_template:   Optional[str] = None):
         super().__init__(cfg, start_template, end_template)
+
+    # ── face text rendering ────────────────────────────────────────────────────
+
+    def _face_number(self, char_x0: float, y_face: float, value: int,
+                     seg_len: float, z_base: float, local_z: float,
+                     lh: float, lw: float, speed: float):
+        """
+        Draw a temperature number on the front face (Y=y_face) at local_z.
+
+        Digits are oriented in the XZ plane so they read correctly from the
+        front of the tower.  At each layer height the method draws whatever
+        cross-section of the 7-segment glyphs intersects that Z:
+
+          - Horizontal bars (top / mid / bottom): one extrusion line at the
+            exact Z level, spanning seg_len in X.
+          - Vertical bars (tl, tr, bl, br): a small horizontal nub (lw wide)
+            at the bar's X edge on every intermediate layer within the bar's
+            Z range.
+
+        seg_len  : length of each 7-segment bar in mm (digit height = 2*seg_len)
+        z_base   : local_z at the bottom of the glyph column
+        """
+        SL  = seg_len
+        GAP = SL * 0.4       # gap between characters
+        tol = lh * 0.55      # Z window for hitting a horizontal bar's layer
+        nub = lw * 1.5       # width of vertical-bar nub
+
+        cx = char_x0
+        for ch in str(value):
+            if ch not in self._SEGS:
+                cx += SL + GAP
+                continue
+            t, tr, br, bot, bl, tl, mid = self._SEGS[ch]
+
+            z_bot = z_base
+            z_mid = z_base + SL
+            z_top = z_base + 2 * SL
+
+            # ── horizontal bars (one layer each) ────────────────────────────
+            if bot and abs(local_z - z_bot) < tol:
+                self._travel(cx, y_face)
+                self._line(cx + SL, y_face, speed, lh, lw)
+
+            if mid and abs(local_z - z_mid) < tol:
+                self._travel(cx, y_face)
+                self._line(cx + SL, y_face, speed, lh, lw)
+
+            if t and abs(local_z - z_top) < tol:
+                self._travel(cx, y_face)
+                self._line(cx + SL, y_face, speed, lh, lw)
+
+            # ── vertical bars (nub at each intermediate layer) ───────────────
+            # Bottom-right bar
+            if br and z_bot + tol < local_z < z_mid - tol:
+                self._travel(cx + SL, y_face)
+                self._line(cx + SL - nub, y_face, speed, lh, lw)
+
+            # Top-right bar
+            if tr and z_mid + tol < local_z < z_top - tol:
+                self._travel(cx + SL, y_face)
+                self._line(cx + SL - nub, y_face, speed, lh, lw)
+
+            # Bottom-left bar
+            if bl and z_bot + tol < local_z < z_mid - tol:
+                self._travel(cx, y_face)
+                self._line(cx + nub, y_face, speed, lh, lw)
+
+            # Top-left bar
+            if tl and z_mid + tol < local_z < z_top - tol:
+                self._travel(cx, y_face)
+                self._line(cx + nub, y_face, speed, lh, lw)
+
+            cx += SL + GAP
 
     def generate(self) -> str:
         c  = self.cfg
@@ -141,6 +218,12 @@ class TowerGenerator(BaseGenerator):
             d_step      = 0.0
             x_step_cone = 0.0
 
+        # Face-text geometry: digits span 2/3 of module_height, centred vertically
+        seg_len   = c.module_height / 3.0          # bar length
+        z_base_txt = (c.module_height - 2.0 * seg_len) / 2.0   # bottom of glyph column
+        # Character advance: seg_len + 40 % gap
+        char_adv  = seg_len * 1.4
+
         # ── layout ────────────────────────────────────────────────────────────
         if c.anchor == "none":
             margin = 2.0
@@ -149,18 +232,10 @@ class TowerGenerator(BaseGenerator):
             margin    = c.anchor_perimeters * spacing_a + 1.0
 
         # Tower body spans: short_side (max_short_w) + bridge_gap + long_side (max_long_w)
-        tower_w = max_short_w + c.bridge_length + max_long_w
-
-        if c.label_tab:
-            max_chars = len(str(max(abs(c.temp_start), abs(c.temp_end))))
-            tab_w     = max_chars * self._digit_width() + self._SEG_GAP
-            label_gap = 2.0
-        else:
-            tab_w = label_gap = 0.0
-
-        anchor_w = tower_w + 2.0 * margin          # anchor wraps tower body
-        full_w   = anchor_w + label_gap + tab_w    # total X footprint
-        full_h   = c.module_depth + 2.0 * margin   # total Y footprint
+        tower_w  = max_short_w + c.bridge_length + max_long_w
+        anchor_w = tower_w + 2.0 * margin
+        full_w   = anchor_w                        # no separate label pillar
+        full_h   = c.module_depth + 2.0 * margin
 
         # Overflow warnings
         if full_w > c.bed_x or full_h > c.bed_y:
@@ -180,23 +255,13 @@ class TowerGenerator(BaseGenerator):
         orig_y = (c.bed_y - full_h) / 2.0
 
         # Absolute Y span
-        y0       = orig_y + margin
-        y1       = y0 + c.module_depth
-        cy_cone  = (y0 + y1) / 2.0   # cone Y centre
+        y0      = orig_y + margin
+        y1      = y0 + c.module_depth
+        cy_cone = (y0 + y1) / 2.0   # cone Y centre
 
         # Absolute X anchors (constant throughout print)
-        # short_x1 = right edge of the short-side wall (fixed reference)
-        # At local_z=0: short side is 5 mm wide, left edge = short_x1 - 5
-        # At local_z=h: short side is (5 + h/tan_short) mm wide, growing leftward
         short_x1 = orig_x + margin + max_short_w
         long_x0  = short_x1 + c.bridge_length   # left edge of long-side wall
-
-        # Label position: to the right of the widest long-side extent
-        if c.label_tab:
-            label_x = long_x0 + max_long_w + label_gap
-            label_y = y0 + (c.module_depth - self._SEG_LEN * 2.0) / 2.0
-        else:
-            label_x = label_y = 0.0
 
         tmpl_vars = self._base_tmpl_vars(max_layer_z, orig_x, orig_y, full_w, full_h)
 
@@ -252,7 +317,7 @@ class TowerGenerator(BaseGenerator):
                 temp         = temps[0]
                 seg_idx      = 0
                 layer_in_seg = 0
-                local_z      = 0.0   # base: use bottom cross-section geometry
+                local_z      = 0.0
             else:
                 seg_layer    = layer_idx - n_base_layers
                 seg_idx      = min(seg_layer // layers_per_seg, n_segs - 1)
@@ -285,8 +350,7 @@ class TowerGenerator(BaseGenerator):
                         f"M106 S{fan}  ; part-cooling fan from layer 2 ({c.fan_speed} %)"
                     )
 
-                # Emit temperature change at first layer of each new segment
-                # (seg 0 already handled at layer_idx==0; skip base layers)
+                # Temperature change at first layer of each new segment
                 if not is_base and layer_in_seg == 0 and seg_idx > 0:
                     self._emit(f"M104 S{temp}  ; segment {seg_idx}: {temp} °C")
                     if c.show_lcd:
@@ -306,16 +370,10 @@ class TowerGenerator(BaseGenerator):
 
             # ── shapes ────────────────────────────────────────────────────────
             if is_base:
-                # Solid base slab: full X span of tower at local_z=0 cross-section
-                # short side at z=0 is 5 mm wide; long side is 20 mm wide
+                # Solid base slab spanning the full X extent at local_z=0
                 base_x0 = short_x1 - 5.0
                 base_w  = 5.0 + c.bridge_length + 20.0
                 self._anchor_layer(base_x0, y0, base_w, c.module_depth, lh, lw, speed)
-                # Label tab column base (free-standing pillar, supported by anchor)
-                if c.label_tab:
-                    self._anchor_layer(
-                        label_x, label_y, tab_w, self._SEG_LEN * 2.0, lh, lw, speed
-                    )
 
             else:
                 # Per-layer widths (walls grow outward as local_z increases)
@@ -332,6 +390,17 @@ class TowerGenerator(BaseGenerator):
                 if long_w > lw:
                     self._anchor_layer(long_x0, y0, long_w, c.module_depth, lh, lw, speed)
 
+                # Temperature label: 7-segment cross-sections on the long wall front face
+                if c.label_tab:
+                    n_chars  = len(str(temp))
+                    text_w   = n_chars * char_adv
+                    # Centre text in the initial 20 mm width of the long wall
+                    char_x0  = _r(long_x0 + (20.0 - text_w) / 2.0, _XY)
+                    self._face_number(
+                        char_x0, y1, temp, seg_len, z_base_txt,
+                        local_z, lh, lw, speed,
+                    )
+
                 # Stringing-test cones (in bridge gap, lower half of each segment)
                 if local_z < cone_h:
                     for cone_c in range(c.n_cones):
@@ -345,15 +414,6 @@ class TowerGenerator(BaseGenerator):
                     self._anchor_layer(
                         short_x1, y0, c.bridge_length, c.module_depth, lh, lw, speed
                     )
-
-                # Label tab: 7-segment digits at segment start, solid fill otherwise
-                if c.label_tab:
-                    tab_h = self._SEG_LEN * 2.0
-                    if layer_in_seg == 0:
-                        self._comment(f"Label: {temp} °C")
-                        self._draw_number(label_x, label_y, float(temp), lh, lw, speed)
-                    else:
-                        self._anchor_layer(label_x, label_y, tab_w, tab_h, lh, lw, speed)
 
         # ── end G-code ─────────────────────────────────────────────────────────
         self._blank()
@@ -429,7 +489,7 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--base-thick",    type=float, default=1.0,  metavar="mm",
                    help="Thickness of solid base slab")
     g.add_argument("--no-label-tab", dest="label_tab", action="store_false",
-                   help="Disable per-segment temperature labels (default: enabled)")
+                   help="Disable temperature labels on long-wall face (default: enabled)")
 
     return p
 
