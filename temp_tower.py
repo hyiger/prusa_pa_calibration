@@ -83,6 +83,7 @@ class Config(CommonConfig):
 
     # Face text: 7-segment temperature number on the front face of the long wall
     label_tab:     bool  = True   # embed temperature label in the long-wall face
+    grid_walls:    bool  = False  # use crosshatch grid infill for overhang walls
 
 
 # ── Temperature tower generator ────────────────────────────────────────────────
@@ -94,6 +95,27 @@ class TowerGenerator(BaseGenerator):
                  start_template: Optional[str] = None,
                  end_template:   Optional[str] = None):
         super().__init__(cfg, start_template, end_template)
+
+    def _grid_layer(self, x0: float, y0: float, sx: float, sy: float,
+                    lh: float, lw: float, speed: float):
+        """Filled rectangle: 2 perimeters + crosshatch grid infill (~50%)."""
+        self._anchor_frame(x0, y0, sx, sy, lh, lw, 2, speed)
+        base_spacing = lw - lh * (1.0 - math.pi / 4.0)
+        pitch = base_spacing * 2          # 2× pitch → ~50% density per direction
+        ix0 = x0 + 2 * base_spacing
+        iy0 = y0 + 2 * base_spacing
+        ix1 = x0 + sx - 2 * base_spacing
+        iy1 = y0 + sy - 2 * base_spacing
+        y = iy0;  lr = True
+        while y <= iy1 + 1e-6:
+            if lr:  self._travel(ix0, y);  self._line(ix1, y,  speed, lh, lw)
+            else:   self._travel(ix1, y);  self._line(ix0, y,  speed, lh, lw)
+            y += pitch;  lr = not lr
+        x = ix0;  lr = True
+        while x <= ix1 + 1e-6:
+            if lr:  self._travel(x, iy0);  self._line(x, iy1,  speed, lh, lw)
+            else:   self._travel(x, iy1);  self._line(x, iy0,  speed, lh, lw)
+            x += pitch;  lr = not lr
 
     def generate(self) -> str:
         c  = self.cfg
@@ -308,15 +330,17 @@ class TowerGenerator(BaseGenerator):
                 sx0 = _r(short_x1 - (5.0 + local_z / tan_short), _XY)
                 lx1 = _r(long_x0  + 20.0 + local_z / tan_long,   _XY)
 
-                # Short overhang wall — solid filled rectangle, growing leftward
+                wall_fill = self._grid_layer if c.grid_walls else self._anchor_layer
+
+                # Short overhang wall — growing leftward
                 short_w = short_x1 - sx0
                 if short_w > lw:
-                    self._anchor_layer(sx0, y0, short_w, c.module_depth, lh, lw, speed)
+                    wall_fill(sx0, y0, short_w, c.module_depth, lh, lw, speed)
 
-                # Long overhang wall — solid fill
+                # Long overhang wall — growing rightward
                 long_w = lx1 - long_x0
                 if long_w > lw:
-                    self._anchor_layer(long_x0, y0, long_w, c.module_depth, lh, lw, speed)
+                    wall_fill(long_x0, y0, long_w, c.module_depth, lh, lw, speed)
 
                 # Stringing-test cones (in bridge gap, lower half of each segment)
                 if local_z < cone_h:
@@ -416,6 +440,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Thickness of solid base slab")
     g.add_argument("--no-label-tab", dest="label_tab", action="store_false",
                    help="Disable temperature labels on long-wall face (default: enabled)")
+    g.add_argument("--grid-walls", dest="grid_walls", action="store_true",
+                   help="Use crosshatch grid infill (~50%%) for overhang walls instead of solid")
 
     return p
 
@@ -469,6 +495,7 @@ def main():
         unretract_speed    = args.unretract_speed,
         zhop               = args.zhop,
         label_tab          = args.label_tab,
+        grid_walls         = args.grid_walls,
         anchor             = args.anchor,
         anchor_perimeters  = args.anchor_perimeters,
         show_lcd           = args.show_lcd,
