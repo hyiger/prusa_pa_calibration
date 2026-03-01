@@ -254,32 +254,28 @@ def _thumbnail_pa(w: int, h: int) -> bytes:
 
 
 def _thumbnail_tower(w: int, h: int) -> bytes:
-    """Thumbnail for temperature tower: uniform column with segment dividers and side wings."""
+    """Thumbnail for temperature tower: inverted step pyramid (wider at top).
+
+    Each segment's overhang walls extend further than the one below, so the
+    overall silhouette grows wider going up — narrow at the base, wide at the top.
+    """
     r = _Raster(w, h)
     n = max(2, min(7, h // 16))
 
-    # Central column (uniform width — matches the actual rectangular tower)
-    col_w  = max(4, w * 9 // 20)
-    col_x0 = (w - col_w) // 2
-    col_x1 = col_x0 + col_w
     top_m  = max(1, h // 10)
-    r.fill_rect(col_x0, top_m, col_x1, h)
+    seg_h  = max(1, (h - top_m) // n)
+    min_w  = max(4, w * 2 // 5)   # bottom segment (~40 % of width)
+    max_w  = max(6, w * 9 // 10)  # top    segment (~90 % of width)
 
-    # Horizontal segment dividers (thin background-coloured gaps)
-    seg_h = (h - top_m) // n
-    for i in range(1, n):
-        y = top_m + i * seg_h
-        r.fill_rect(col_x0, y, col_x1, y + 1, _THUMB_BG)
-
-    # Overhang wing stubs: small tabs on each side, centred within each segment
-    wing_w = max(1, col_x0 * 2 // 3)
-    wing_h = max(1, seg_h * 3 // 8)
     for i in range(n):
-        cy  = top_m + i * seg_h + seg_h // 2
-        wy0 = cy - wing_h // 2
-        wy1 = wy0 + wing_h
-        r.fill_rect(col_x0 - wing_w, wy0, col_x0, wy1)
-        r.fill_rect(col_x1,          wy0, col_x1 + wing_w, wy1)
+        # i=0 → top of image = top of tower (widest overhang)
+        # i=n-1 → bottom of image = base of tower (narrowest)
+        frac  = (n - 1 - i) / max(1, n - 1)
+        seg_w = int(min_w + frac * (max_w - min_w))
+        x0    = (w - seg_w) // 2
+        y0    = top_m + i * seg_h
+        y1    = top_m + (i + 1) * seg_h
+        r.fill_rect(x0, y0, x0 + seg_w, y1)
 
     return r.to_png()
 
